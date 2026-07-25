@@ -1,0 +1,10 @@
+web/node_modules/
+web/dist/
+web/.env.local
+web/.env
+.secrets/
+*.env.db
+.DS_Store
+# data_export CSVs are imported into Supabase, not served by the app. Keep them out of the
+# public repo if you consider the numbers sensitive (recommended):
+data_export/*.csv
