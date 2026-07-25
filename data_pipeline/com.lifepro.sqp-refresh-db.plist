@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Monthly SQP + Ads refresh (DB lane). Runs natively on this Mac so the Mac's public IP
+     is what hits SellerLabs / Azure (allowlist it once). Ranks is NOT here — it runs as a
+     daily scheduled Claude task (needs the Google Drive connector).
+
+     Install:
+       cp data_pipeline/com.lifepro.sqp-refresh-db.plist ~/Library/LaunchAgents/
+       launchctl load ~/Library/LaunchAgents/com.lifepro.sqp-refresh-db.plist
+     Test immediately:  launchctl start com.lifepro.sqp-refresh-db
+     Uninstall:         launchctl unload ~/Library/LaunchAgents/com.lifepro.sqp-refresh-db.plist  -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.lifepro.sqp-refresh-db</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>cd "$HOME/Downloads/sqp-explorer" &amp;&amp; ./data_pipeline/refresh_db.sh</string>
+  </array>
+  <!-- 1st of every month at 07:00 local. If the Mac is asleep/off, launchd runs it at next wake. -->
+  <key>StartCalendarInterval</key>
+  <dict><key>Day</key><integer>1</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer></dict>
+  <key>StandardOutPath</key><string>/tmp/sqp-refresh-db.out.log</string>
+  <key>StandardErrorPath</key><string>/tmp/sqp-refresh-db.err.log</string>
+</dict>
+</plist>
