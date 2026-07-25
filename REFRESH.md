@@ -33,9 +33,13 @@ Idempotent: re-running on the same CSV changes nothing (`+0` rows). As long as t
 `update_scheduled_task`. **Pre-approve once:** click *Run now* so the Drive-connector permission is stored;
 otherwise the first real run may pause on a prompt.
 
-**Run it by hand any time** (e.g. after refreshing the CSV yourself):
+The same daily task also splits the **Keywords** tab (same XLSX export) and runs `build_enrich.py`,
+which refreshes `kw_market` (the "Keyword Clicks L4W" market metric shown in the Organic Ranks + Ads
+tabs) and re-applies the **Brand Level** campaign reclassification. Both are idempotent.
+
+**Run it by hand any time** (e.g. after refreshing the CSVs yourself):
 ```bash
-cd "$HOME/Downloads/sqp-explorer" && set -a && . .secrets/supabase.env && set +a && python3 data_pipeline/refresh_ranks.py
+cd "$HOME/Downloads/sqp-explorer" && set -a && . .secrets/supabase.env && set +a && python3 data_pipeline/refresh_ranks.py && python3 data_pipeline/build_enrich.py
 ```
 To only re-pull the CSV, follow the recipe in the `datarova-projects-gsheet` memory note (Drive connector →
 `split_tabs.py … Ranks`). The accumulator lives in Supabase, so history survives even if this Mac is wiped.
@@ -74,6 +78,9 @@ then `launchctl load ~/Library/LaunchAgents/com.lifepro.sqp-refresh-db.plist`. T
 `.secrets/supabase.env` and calls the two pull scripts, logging to `data_pipeline/refresh.log`).
 ⚠️ `manual_family` edits in the Campaign Map tab must be **preserved** across an Ads rebuild — reload
 `campaign_map` with an UPSERT that never overwrites a non-empty `manual_family`.
+⚠️ After any Ads rebuild, run `python3 data_pipeline/build_enrich.py` again to re-apply the **Brand
+Level** name-based reclassification (an ASIN-based rebuild would otherwise re-map umbrella campaigns
+like “[Brand] All Products” back onto a single family). It only touches `auto_family`, never `manual_family`.
 
 ---
 
