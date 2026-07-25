@@ -91,6 +91,12 @@ th.sortable:hover{color:var(--ink)}
 .popitem input{min-height:0;width:15px;height:15px;padding:0;flex:none}
 .popitem span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 button.small,.small.ghost{min-height:30px;padding:5px 10px;font-size:12px}
+
+/* editable catalog cells */
+.cell-input{min-height:32px;padding:5px 8px;font-size:12.5px;width:100%;min-width:90px;
+  background:transparent;border:1px solid transparent;border-radius:7px}
+.cell-input:hover{border-color:var(--line)}
+.cell-input:focus{border-color:var(--accent);background:var(--panel);box-shadow:0 0 0 3px rgba(15,118,110,.12)}
 tr.rowbtn{cursor:pointer;transition:background .12s}
 tr.rowbtn:hover td,tr.rowbtn:focus-visible td{background:var(--panel2)}
 td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}

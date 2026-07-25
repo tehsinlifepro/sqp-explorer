@@ -973,6 +973,100 @@ function OrganicRanks({ region }) {
   )
 }
 
+/* ---------------- Catalog (editable ASIN → family / SKU / category) ---------------- */
+function CatalogTab() {
+  const [rows, setRows] = useState([]); const [loading, setLoading] = useState(true); const [err, setErr] = useState(null)
+  const [regionF, setRegionF] = useState('All'); const [q, setQ] = useState(''); const [saved, setSaved] = useState('')
+  const blank = { region: 'CA', asin: '', family: '', category: '', sku: '', model: '', brand: '' }
+  const [adding, setAdding] = useState(blank)
+  const load = () => { setLoading(true); fetchAll('catalog')
+    .then((d) => { setRows(d); setLoading(false) }).catch((e) => { setErr(e.message); setLoading(false) }) }
+  useEffect(load, [])
+  const families = useMemo(() => [...new Set(rows.map((r) => r.family).filter(Boolean))].sort(), [rows])
+  const categories = useMemo(() => [...new Set(rows.map((r) => r.category).filter(Boolean))].sort(), [rows])
+  const filtered = useMemo(() => rows.filter((r) => {
+    const okR = regionF === 'All' || r.region === regionF
+    const t = q.toLowerCase()
+    const okQ = !q || [r.asin, r.family, r.category, r.sku, r.model, r.brand].some((v) => (v || '').toLowerCase().includes(t))
+    return okR && okQ
+  }), [rows, regionF, q])
+  const { sorted, sort, toggle } = useSort(filtered, { col: 'family', dir: 'asc' })
+
+  const flash = (id) => { setSaved(id); setTimeout(() => setSaved(''), 1400) }
+  const saveCell = async (row, field, value) => {
+    value = value.trim(); if ((row[field] || '') === value) return
+    const { error } = await supabase.from('catalog').update({ [field]: value || null }).eq('region', row.region).eq('asin', row.asin)
+    if (error) { setErr(error.message); if (isAuthErr(error)) supabase.auth.signOut(); return }
+    setRows((rs) => rs.map((r) => (r.region === row.region && r.asin === row.asin ? { ...r, [field]: value } : r))); flash(row.region + row.asin)
+  }
+  const addRow = async () => {
+    const a = adding; const asin = a.asin.trim().toUpperCase()
+    if (!asin) { setErr('ASIN is required.'); return }
+    if (rows.find((r) => r.region === a.region && r.asin === asin)) { setErr(`${asin} already exists in ${a.region}.`); return }
+    const rec = { region: a.region, asin, family: a.family || null, category: a.category || null, sku: a.sku || null, model: a.model || null, brand: a.brand || null }
+    const { error } = await supabase.from('catalog').insert(rec)
+    if (error) { setErr(error.message); if (isAuthErr(error)) supabase.auth.signOut(); return }
+    setErr(null); setRows((rs) => [...rs, rec]); setAdding({ ...blank, region: a.region }); flash('added')
+  }
+  const delRow = async (row) => {
+    if (!window.confirm(`Remove ${row.asin} (${row.region}) from the catalog?`)) return
+    const { error } = await supabase.from('catalog').delete().eq('region', row.region).eq('asin', row.asin)
+    if (error) { setErr(error.message); return }
+    setRows((rs) => rs.filter((r) => !(r.region === row.region && r.asin === row.asin)))
+  }
+  return (
+    <div>
+      <datalist id="cat-fams">{families.map((f) => <option key={f} value={f} />)}</datalist>
+      <datalist id="cat-cats">{categories.map((c) => <option key={c} value={c} />)}</datalist>
+      <div className="controls">
+        <div className="field"><label htmlFor="cat-reg">Region</label>
+          <select id="cat-reg" value={regionF} onChange={(e) => setRegionF(e.target.value)}><option>All</option><option>US</option><option>CA</option></select></div>
+        <div className="field" style={{ flex: 1, minWidth: 220 }}><label htmlFor="cat-q">Search</label>
+          <input id="cat-q" value={q} onChange={(e) => setQ(e.target.value)} placeholder="ASIN, family, category, SKU…" /></div>
+      </div>
+      <div className="card">
+        <h3>Add an ASIN {saved === 'added' && <span className="badge up">added ✓</span>}</h3>
+        <div className="controls" style={{ alignItems: 'flex-end', marginBottom: 0 }}>
+          <div className="field"><label>Region</label><select value={adding.region} onChange={(e) => setAdding({ ...adding, region: e.target.value })}><option>CA</option><option>US</option></select></div>
+          <div className="field"><label>ASIN *</label><input value={adding.asin} onChange={(e) => setAdding({ ...adding, asin: e.target.value })} placeholder="B0…" style={{ width: 128 }} /></div>
+          <div className="field"><label>Family</label><input list="cat-fams" value={adding.family} onChange={(e) => setAdding({ ...adding, family: e.target.value })} placeholder="pick or type" /></div>
+          <div className="field"><label>Category</label><input list="cat-cats" value={adding.category} onChange={(e) => setAdding({ ...adding, category: e.target.value })} placeholder="pick or type" /></div>
+          <div className="field"><label>SKU</label><input value={adding.sku} onChange={(e) => setAdding({ ...adding, sku: e.target.value })} style={{ width: 130 }} /></div>
+          <div className="field"><label>Product / Model</label><input value={adding.model} onChange={(e) => setAdding({ ...adding, model: e.target.value })} /></div>
+          <button className="primary" onClick={addRow}>Add ASIN</button>
+        </div>
+      </div>
+      <div className="card">
+        <h3>Catalog — ASIN → family / SKU / category <span className="muted small">({sorted.length})</span> {saved && saved !== 'added' && <span className="badge up">saved ✓</span>}</h3>
+        {err && <ErrorBanner msg={err} onRetry={load} />}
+        {loading ? <SkelRows n={10} /> : !sorted.length ? <Empty /> : (
+          <div className="table-scroll"><table>
+            <thead><tr>
+              <Th col="asin" sort={sort} toggle={toggle}>ASIN</Th>
+              <Th col="region" sort={sort} toggle={toggle}>Region</Th>
+              <Th col="family" sort={sort} toggle={toggle}>Family</Th>
+              <Th col="category" sort={sort} toggle={toggle}>Category</Th>
+              <Th col="sku" sort={sort} toggle={toggle}>SKU</Th>
+              <Th col="model" sort={sort} toggle={toggle}>Product / Model</Th>
+              <th aria-label="remove" />
+            </tr></thead>
+            <tbody>{sorted.slice(0, 500).map((r) => (
+              <tr key={r.region + r.asin}>
+                <td className="small"><b>{r.asin}</b></td>
+                <td className="small muted">{r.region}</td>
+                <td><input className="cell-input" list="cat-fams" defaultValue={r.family || ''} onBlur={(e) => saveCell(r, 'family', e.target.value)} /></td>
+                <td><input className="cell-input" list="cat-cats" defaultValue={r.category || ''} onBlur={(e) => saveCell(r, 'category', e.target.value)} /></td>
+                <td><input className="cell-input" defaultValue={r.sku || ''} onBlur={(e) => saveCell(r, 'sku', e.target.value)} /></td>
+                <td><input className="cell-input" defaultValue={r.model || ''} onBlur={(e) => saveCell(r, 'model', e.target.value)} /></td>
+                <td><button className="ghost small" title="remove" onClick={() => delRow(r)}>✕</button></td>
+              </tr>))}
+            </tbody></table></div>)}
+        <div className="muted small" style={{ marginTop: 10 }}>Edits save when you leave a cell. Family / Category accept an existing value (dropdown) or a new one you type. New ASINs flow into Family, Categories, ASIN Explorer and auto-map ad campaigns on the next refresh. Showing up to 500.</div>
+      </div>
+    </div>
+  )
+}
+
 /* ---------------- App shell ---------------- */
 export default function App() {
   const [authed, setAuthed] = useState(false); const [ready, setReady] = useState(false)
@@ -984,7 +1078,7 @@ export default function App() {
   }, [])
   if (!ready) return <div className="app"><SkelRows n={4} /></div>
   if (!authed) return <Login onIn={() => setAuthed(true)} />
-  const TABS = [['dash', 'Dashboard'], ['keyword', 'Keyword Explorer'], ['family', 'Family Explorer'], ['ranks', 'Organic Ranks'], ['ads', 'Ads'], ['map', 'Campaign Map'], ['cats', 'Categories'], ['asin', 'ASIN Explorer'], ['dl', 'Downloads']]
+  const TABS = [['dash', 'Dashboard'], ['keyword', 'Keyword Explorer'], ['family', 'Family Explorer'], ['ranks', 'Organic Ranks'], ['ads', 'Ads'], ['map', 'Campaign Map'], ['cats', 'Categories'], ['asin', 'ASIN Explorer'], ['catalog', 'Catalog'], ['dl', 'Downloads']]
   const SI = (d) => <svg viewBox="0 0 24 24"><path d={d} /></svg>
   const ICONS = {
     dash: <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg>,
@@ -995,6 +1089,7 @@ export default function App() {
     map: SI('M9 3l6 3 6-3v15l-6 3-6-3-6 3V6zM9 3v15M15 6v15'),
     cats: <svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2" /><path d="M4 10h16" /></svg>,
     asin: SI('M20 7l-8-4-8 4 8 4 8-4zM4 7v10l8 4 8-4V7M12 11v10'),
+    catalog: SI('M4 5a2 2 0 012-2h13v16H6a2 2 0 00-2 2zM4 5v14M9 3v16'),
     dl: SI('M12 3v12m0 0l4-4m-4 4l-4-4M5 21h14'),
   }
   return (
@@ -1025,6 +1120,7 @@ export default function App() {
         {tab === 'map' && <CampaignMapping />}
         {tab === 'cats' && <Categories region={region} />}
         {tab === 'asin' && <AsinExplorer region={region} />}
+        {tab === 'catalog' && <CatalogTab />}
         {tab === 'dl' && <Downloads region={region} />}
         <div className="muted small" style={{ marginTop: 20 }}>
           Data: Amazon Brand Analytics SQP · Jul 2025–Jun 2026 · search-attributed purchases (not total units; excludes 1P/Vendor).
