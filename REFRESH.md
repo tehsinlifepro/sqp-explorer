@@ -8,41 +8,37 @@ so they use two different runners. The one rule that matters:
 
 | Stream | Source | Window | Accumulator? | Cadence | Runner | Status |
 |---|---|---|---|---|---|---|
-| **Ranks** | Datarova Google Sheet | rolling **30 days** | ✅ `rank_daily` (upsert) | **daily** | Scheduled Claude task | ✅ **live** |
-| **Ads** | Azure Postgres (Canada Vendor Central) | full history | ❌ rebuild ok | monthly | Mac `launchd` | ⚠️ scaffold — see §3 |
-| **SQP** | SellerLabs MySQL (3P) | ~12 mo | ❌ rebuild ok | monthly | Mac `launchd` | ⚠️ scaffold — see §3 |
+| **Ranks** | Datarova Google Sheet | rolling **30 days** | ✅ `rank_daily` (upsert) | **daily** | Scheduled Claude task (gws) | ✅ **live** |
+| **Ads** | Azure Postgres (Canada Vendor Central) | full history | ❌ rebuild ok | monthly | Mac `launchd` | ✅ **built + tested** |
+| **SQP** | SellerLabs MySQL (3P) | ~12 mo | ❌ rebuild ok | monthly | Mac `launchd` | ✅ built (pull needs 1st Mac run) |
 
-Why two runners: Ranks needs **Google auth** (only a logged-in Claude session has it) but **no** DB
-allowlist. Ads/SQP need **DB creds + a static IP on the allowlist** but no Google auth. Opposite needs →
-opposite hosts.
+Why two runners: Ranks pulls a Google Sheet (auth via the `gws` CLI, no DB allowlist). Ads/SQP need
+**DB creds + a static IP on the allowlist**, so they run on the Mac. Ads (Azure) + SQP builders/loader
+were tested from here; the SellerLabs SQP *pull* can only run where the IP is allowlisted (the Mac).
 
 ---
 
 ## 1. Ranks — daily, automatic (LIVE)
 
-**What runs:** the scheduled Claude task `refresh-ranks-daily` (06:09 local, daily). Each run:
-1. Pulls the **Ranks** tab from the private Datarova sheet via the Google Drive connector → `Ranks.csv`.
-2. Runs `data_pipeline/refresh_ranks.py`, which:
-   - **UPSERTs** the pulled 30-day window into `rank_daily` (the permanent record — never truncated),
-   - **re-derives** `rank_family_day` + `rank_family_keyword` (what the app reads) from the *full* accumulator.
+**What runs:** the scheduled Claude task `refresh-ranks-daily` (06:09 local, daily) runs three commands:
+1. `python3 data_pipeline/pull_datarova_gws.py` — pulls the **Ranks** + **Keywords** tabs headlessly via
+   the **`gws` CLI** (keyring auth) → `Ranks.csv` + `Keywords.csv`. (NOT the Google Drive connector — that
+   only works interactively, so the earlier connector-based task couldn't pull in scheduled runs.)
+2. `python3 data_pipeline/refresh_ranks.py` — **UPSERTs** the 30-day window into `rank_daily` (the permanent
+   record, never truncated) and **re-derives** `rank_family_day` + `rank_family_keyword` from the *full* accumulator.
+3. `python3 data_pipeline/build_enrich.py` — refreshes `kw_market` (Keyword Clicks L4W) + the enrichment views.
 
-Idempotent: re-running on the same CSV changes nothing (`+0` rows). As long as the gap between runs is
-< 30 days, no day is ever missed — daily gives a wide safety margin.
+Idempotent: re-running on an unchanged sheet changes nothing (`+0` rows). As long as the gap between runs
+is < 30 days, no day is missed. **Note:** if `rank_daily` isn't advancing, first check whether the Datarova
+sheet itself has newer dates — a stale source (not the task) is the usual cause.
 
-**Manage it:** the "Scheduled" section in the app sidebar. Edit the schedule/prompt there, or via
-`update_scheduled_task`. **Pre-approve once:** click *Run now* so the Drive-connector permission is stored;
-otherwise the first real run may pause on a prompt.
+**Manage it:** the "Scheduled" section in the app sidebar, or `update_scheduled_task`.
 
-The same daily task also splits the **Keywords** tab (same XLSX export) and runs `build_enrich.py`,
-which refreshes `kw_market` (the "Keyword Clicks L4W" market metric shown in the Organic Ranks + Ads
-tabs) and re-applies the **Brand Level** campaign reclassification. Both are idempotent.
-
-**Run it by hand any time** (e.g. after refreshing the CSVs yourself):
+**Run it by hand any time:**
 ```bash
-cd "$HOME/Downloads/sqp-explorer" && set -a && . .secrets/supabase.env && set +a && python3 data_pipeline/refresh_ranks.py && python3 data_pipeline/build_enrich.py
+cd "$HOME/Downloads/sqp-explorer" && python3 data_pipeline/pull_datarova_gws.py && set -a && . .secrets/supabase.env && set +a && python3 data_pipeline/refresh_ranks.py && python3 data_pipeline/build_enrich.py
 ```
-To only re-pull the CSV, follow the recipe in the `datarova-projects-gsheet` memory note (Drive connector →
-`split_tabs.py … Ranks`). The accumulator lives in Supabase, so history survives even if this Mac is wiped.
+The accumulator lives in Supabase, so history survives even if this Mac is wiped.
 
 ---
 
@@ -56,36 +52,31 @@ cd "$HOME/Downloads/sqp-explorer" && set -a && . .secrets/supabase.env && set +a
 
 ---
 
-## 3. Ads + SQP — monthly, on the Mac (scaffold; needs first verified run)
+## 3. Ads + SQP — monthly, on the Mac (built)
 
-These sources retain history, so the routine is a **full monthly rebuild**, not an accumulator:
-`pull → rebuild derived tables → reload Supabase`. They run natively on this Mac (via `launchd`) so the
-Mac's **public IP** is what hits the DBs — allowlist it **once** in SellerLabs and Azure (from a rotating
-Claude sandbox the IP churns, which is why these don't run as a Claude task).
+These sources retain history, so the routine is a **full monthly rebuild**. They run natively on this Mac
+(via `launchd`) so the Mac's **public IP** hits the DBs — allowlist it **once** in SellerLabs and Azure.
+`data_pipeline/refresh_db.sh` runs the three scripts in order and logs to `data_pipeline/refresh.log`:
 
-**Not yet built:** the SellerLabs SQP pull and the Azure ad-search-term pull were done ad-hoc earlier and
-never saved as scripts (`ad_searchterm` also has no primary key yet). To finish this lane:
-1. Reconstruct `data_pipeline/refresh_sqp.py` (SellerLabs → rebuild masters → rebuild `catalog`,
-   `category_month`, `family_summary`, `asin_month`, `query_*`, `family_*` → reload Supabase) and
-   `data_pipeline/refresh_ads.py` (Azure → rebuild `ad_searchterm` + `campaign_map`, **preserving**
-   `manual_family` edits → reload). The exact pull SQL is recoverable from the project transcript.
-2. Verify them once by running on this Mac (with the Mac IP allowlisted).
-3. Schedule with the launchd job below.
+1. **`refresh_sqp.py`** — SellerLabs `search_query_performance_by_month` (CA=venue 4, US=venue 6) for the
+   catalog's ASINs → enrich with the current Supabase `catalog` → write masters → run the 3 builders
+   (`build_supabase_tables` / `build_keyword_tables` / `build_family_tables`) → load the 9 derived tables
+   via `sb_load.py`. **Leaves `catalog` untouched** (it's user-managed in the Catalog tab). *Builders +
+   loader are tested; the SellerLabs pull needs its first run on the allowlisted Mac.*
+2. **`refresh_ads.py`** — Azure SP/SB search-term reports → rebuild `ad_searchterm` (SP sales/orders =
+   7-day window, SB = 14-day) + `campaign_map`, **preserving `manual_family`**. *Tested end-to-end.*
+3. **`build_campaign_map.py`** — sets SP `auto_family` by the **80% advertised-spend dominance** rule
+   (single family ≥ 80% of a campaign's advertised-product spend → map; else leave unmapped). Must run
+   **after** `refresh_ads.py`. Never touches `manual_family`. *Tested (415 mapped / 41 unmapped).*
 
-**launchd (monthly, 1st @ 07:00).** Save as `~/Library/LaunchAgents/com.lifepro.sqp-refresh-db.plist`,
-then `launchctl load ~/Library/LaunchAgents/com.lifepro.sqp-refresh-db.plist`. Template lives at
-`data_pipeline/com.lifepro.sqp-refresh-db.plist`; it runs `data_pipeline/refresh_db.sh` (which loads
-`.secrets/supabase.env` and calls the two pull scripts, logging to `data_pipeline/refresh.log`).
-⚠️ `manual_family` edits in the Campaign Map tab must be **preserved** across an Ads rebuild — reload
-`campaign_map` with an UPSERT that never overwrites a non-empty `manual_family`.
-
-**Campaign → family AUTO mapping = `data_pipeline/build_campaign_map.py`** (part of this lane; needs
-Azure + Supabase). Rule: an SP campaign auto-maps to a family only if a **single family holds ≥ 80% of
-its advertised-product spend** (from `ads_sponsored_products_advertised_product`); campaigns whose spend
-is spread across families (e.g. “[Brand] All Products”, 17 ASINs) are left **unmapped** for manual
-mapping (a family, or “Brand Level”). It only sets `auto_family`/`status`, never `manual_family`. Re-run
-it after every Ads rebuild (an ASIN-based rebuild would otherwise re-pin umbrella campaigns to one family).
-Run: `set -a && . .secrets/supabase.env && set +a && python3 data_pipeline/build_campaign_map.py`
+**launchd (monthly, 1st @ 07:00):**
+```bash
+cp data_pipeline/com.lifepro.sqp-refresh-db.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.lifepro.sqp-refresh-db.plist
+launchctl start com.lifepro.sqp-refresh-db     # test it immediately
+```
+Before the first run: allowlist the Mac's public IP in **SellerLabs** (and confirm Azure). Then verify
+`refresh.log` shows the SQP master row counts.
 
 ---
 
