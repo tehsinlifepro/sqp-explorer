@@ -293,19 +293,28 @@ function Dashboard({ region }) {
 /* ---------------- Categories (what category has what) ---------------- */
 function Categories({ region }) {
   const { rows: fams, loading, error } = useRows('family_summary', { region })
+  const { rows: fnm } = useRows('family_niche_month', { region })
   const [open, setOpen] = useState(null)
+  const months = useMemo(() => [...new Set(fnm.map((r) => r.month))].sort(), [fnm])
+  const mr = useMonthRange(months)
+  const purByFam = useMemo(() => {
+    const m = {}; fnm.forEach((r) => { if (mr.inRange(r.month)) m[r.family] = (m[r.family] || 0) + (r.our_purchases || 0) }); return m
+  }, [fnm, mr.from, mr.to])
   const byCat = useMemo(() => {
     const m = {}
     for (const f of fams) {
+      const p = purByFam[f.family] || 0
       const c = (m[f.category] = m[f.category] || { category: f.category, families: 0, asins: 0, purchases: 0, rows: [] })
-      c.families++; c.asins += f.asins || 0; c.purchases += f.purchases_12mo || 0; c.rows.push(f)
+      c.families++; c.asins += f.asins || 0; c.purchases += p; c.rows.push({ ...f, purchases_range: p })
     }
     return Object.values(m).sort((a, b) => b.purchases - a.purchases)
-  }, [fams])
+  }, [fams, purByFam])
   const { sorted, sort: sortState, toggle: sortBy } = useSort(byCat, { col: 'purchases', dir: 'desc' })
   const toggle = (c) => setOpen(open === c ? null : c)
   return (
-    <div className="card">
+    <div>
+      <div className="controls"><MonthRange r={mr} /></div>
+      <div className="card">
       <h3>Categories — what we sell where ({region})</h3>
       {error && <ErrorBanner msg={error} />}
       {loading ? <SkelRows n={8} /> : !byCat.length ? <Empty /> : (
@@ -315,7 +324,7 @@ function Categories({ region }) {
               <Th col="category" sort={sortState} toggle={sortBy}>Category</Th>
               <Th col="families" sort={sortState} toggle={sortBy} num>Families</Th>
               <Th col="asins" sort={sortState} toggle={sortBy} num>ASINs</Th>
-              <Th col="purchases" sort={sortState} toggle={sortBy} num>Our purchases (12mo)</Th>
+              <Th col="purchases" sort={sortState} toggle={sortBy} num>Our purchases (range)</Th>
               <th aria-label="expand" /></tr></thead>
             <tbody>
               {sorted.map((c) => {
@@ -331,12 +340,12 @@ function Categories({ region }) {
                       <td className="num">{num(c.purchases)}</td>
                       <td className="muted small" aria-hidden="true">{isOpen ? '▲' : '▼'}</td>
                     </tr>
-                    {isOpen && [...c.rows].sort((a, b) => b.purchases_12mo - a.purchases_12mo).map((f) => (
+                    {isOpen && [...c.rows].sort((a, b) => b.purchases_range - a.purchases_range).map((f) => (
                       <tr key={f.family} style={{ background: 'var(--panel2)' }}>
                         <td style={{ paddingLeft: 26 }} className="muted">↳ {f.family}</td>
                         <td className="num muted">{f.asins}</td>
                         <td className="num muted">{num(f.impressions)} impr</td>
-                        <td className="num">{num(f.purchases_12mo)} · <span className="muted">{pct(f.mkt_share_in_its_queries)} mkt</span></td>
+                        <td className="num">{num(f.purchases_range)} · <span className="muted">{pct(f.mkt_share_in_its_queries)} mkt</span></td>
                         <td><span className={'badge ' + (f.trajectory === 'growing' ? 'up' : f.trajectory === 'declining' ? 'down' : 'flat')}>{f.trajectory}</span></td>
                       </tr>
                     ))}
@@ -347,7 +356,8 @@ function Categories({ region }) {
           </table>
         </div>
       )}
-      <div className="muted small" style={{ marginTop: 10 }}>Click (or focus + Enter) a category to expand its families. "mkt" = our share of that family's search queries.</div>
+      <div className="muted small" style={{ marginTop: 10 }}>Click a category to expand its families. Purchases reflect the selected months; “mkt” share is 12-month.</div>
+      </div>
     </div>
   )
 }
@@ -358,7 +368,9 @@ function AsinExplorer({ region }) {
   const [asin, setAsin] = useState('')
   useEffect(() => { if (catalog.length && !catalog.find((c) => c.asin === asin)) setAsin(catalog[0].asin) }, [catalog]) // eslint-disable-line
   const { rows: raw, loading: rl, error: re } = useRows('asin_month', asin ? { region, asin } : { region, asin: '__none__' })
-  const rows = useMemo(() => [...raw].sort((a, b) => a.month.localeCompare(b.month)), [raw])
+  const months = useMemo(() => [...new Set(raw.map((r) => r.month))].sort(), [raw])
+  const mr = useMonthRange(months)
+  const rows = useMemo(() => [...raw].filter((r) => mr.inRange(r.month)).sort((a, b) => a.month.localeCompare(b.month)), [raw, mr.from, mr.to])
   const options = useMemo(() => [...catalog].sort((a, b) => (a.category + a.family).localeCompare(b.category + b.family)), [catalog])
   const meta = catalog.find((c) => c.asin === asin) || {}
   const total = rows.reduce((s, r) => s + (r.purchases || 0), 0)
@@ -373,9 +385,10 @@ function AsinExplorer({ region }) {
             {options.map((c) => <option key={c.asin} value={c.asin}>{c.asin} — {c.family} ({c.category})</option>)}
           </select>
         </div>
+        <MonthRange r={mr} />
       </div>
       <div className="kpis" style={{ marginBottom: 16 }}>
-        <div className="kpi"><div className="v">{rl ? '…' : num(total)}</div><div className="l">Purchases (12mo, core)</div></div>
+        <div className="kpi"><div className="v">{rl ? '…' : num(total)}</div><div className="l">Purchases (range, core)</div></div>
         <div className="kpi"><div className="v">{meta.family || '—'}</div><div className="l">Family</div></div>
         <div className="kpi"><div className="v">{meta.category || '—'}</div><div className="l">Category</div></div>
         <div className="kpi"><div className="v">{meta.sku || meta.model || '—'}</div><div className="l">SKU</div></div>

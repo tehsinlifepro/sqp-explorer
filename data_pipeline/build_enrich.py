@@ -84,23 +84,9 @@ grant select on v_query_latest, v_rank_kw_enriched, v_ad_term_enriched to authen
 c.commit()
 print("views: v_query_latest, v_rank_kw_enriched, v_ad_term_enriched ✓")
 
-# ── 5. brand-level reclassification (name-based; overridable in the app) ───────
-# Umbrella / brand campaigns should NOT be forced into one family via their advertised ASIN.
-BRAND_PATTERNS = ["[brand]", "all products", "all product ", "brand campaign",
-                  "brand -", "- brand", "portfolio", "catalog", "brand defense",
-                  "brand awareness", "branded search", "brand search"]
-where = " or ".join(["lower(campaign_name) like %s"] * len(BRAND_PATTERNS))
-params = [f"%{p}%" for p in BRAND_PATTERNS]
-cur.execute(f"""update campaign_map
-  set auto_family='Brand Level', status='brand-level'
-  where ({where}) and coalesce(status,'')<>'brand-level'""", params)
-n = cur.rowcount
-c.commit()
-cur.execute("select count(*), coalesce(sum(spend),0) from campaign_map where status='brand-level'")
-bc, bs = cur.fetchone()
-print(f"brand-level reclassify: +{n} campaigns → now {bc} brand-level (C${float(bs):,.0f} spend)")
-cur.execute("select campaign_name, auto_family, status from campaign_map where campaign_name ilike '%All Products - Lifepro%'")
-print("  example:", cur.fetchall())
+# NOTE: campaign → family AUTO mapping is NOT done here. It lives in build_campaign_map.py
+# (spend-weighted 80%-dominance rule, needs the Azure advertised-product report) and runs as part
+# of the MONTHLY Ads refresh. This script stays Azure-free so it can run daily.
 
 # ── verify enrichment coverage ────────────────────────────────────────────────
 cur.execute("select count(*), count(clicks_l4w), count(sqp_volume) from v_rank_kw_enriched")

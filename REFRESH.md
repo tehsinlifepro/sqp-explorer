@@ -78,9 +78,14 @@ then `launchctl load ~/Library/LaunchAgents/com.lifepro.sqp-refresh-db.plist`. T
 `.secrets/supabase.env` and calls the two pull scripts, logging to `data_pipeline/refresh.log`).
 ⚠️ `manual_family` edits in the Campaign Map tab must be **preserved** across an Ads rebuild — reload
 `campaign_map` with an UPSERT that never overwrites a non-empty `manual_family`.
-⚠️ After any Ads rebuild, run `python3 data_pipeline/build_enrich.py` again to re-apply the **Brand
-Level** name-based reclassification (an ASIN-based rebuild would otherwise re-map umbrella campaigns
-like “[Brand] All Products” back onto a single family). It only touches `auto_family`, never `manual_family`.
+
+**Campaign → family AUTO mapping = `data_pipeline/build_campaign_map.py`** (part of this lane; needs
+Azure + Supabase). Rule: an SP campaign auto-maps to a family only if a **single family holds ≥ 80% of
+its advertised-product spend** (from `ads_sponsored_products_advertised_product`); campaigns whose spend
+is spread across families (e.g. “[Brand] All Products”, 17 ASINs) are left **unmapped** for manual
+mapping (a family, or “Brand Level”). It only sets `auto_family`/`status`, never `manual_family`. Re-run
+it after every Ads rebuild (an ASIN-based rebuild would otherwise re-pin umbrella campaigns to one family).
+Run: `set -a && . .secrets/supabase.env && set +a && python3 data_pipeline/build_campaign_map.py`
 
 ---
 
