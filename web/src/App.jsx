@@ -87,6 +87,88 @@ const SkelChart = () => <div className="skel chart" aria-hidden="true" />
 const SkelRows = ({ n = 5 }) => <div aria-hidden="true">{Array.from({ length: n }).map((_, i) =>
   <div className="skel" key={i} style={{ width: (90 - i * 8) + '%' }} />)}</div>
 
+/* ---------- sortable tables: useSort + <Th> (click any header to sort) ---------- */
+function useSort(rows, initial) {
+  const [sort, setSort] = useState(initial || { col: null, dir: 'desc' })
+  const sorted = useMemo(() => {
+    if (!sort.col) return rows
+    const dir = sort.dir === 'asc' ? 1 : -1
+    return [...rows].sort((a, b) => {
+      const av = a[sort.col], bv = b[sort.col]
+      const an = av == null || av === '', bn = bv == null || bv === ''
+      if (an && bn) return 0
+      if (an) return 1            // nulls / blanks always sort last
+      if (bn) return -1
+      if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir
+      return String(av).localeCompare(String(bv), undefined, { numeric: true }) * dir
+    })
+  }, [rows, sort])
+  const toggle = (col) => setSort((s) => (s.col === col ? { col, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { col, dir: 'desc' }))
+  return { sorted, sort, toggle }
+}
+const Th = ({ col, sort, toggle, children, num, ...p }) => (
+  <th {...p} className={(num ? 'num ' : '') + 'sortable'} onClick={() => toggle(col)}
+      aria-sort={sort.col === col ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+    {children}<span className="sortcaret">{sort.col === col ? (sort.dir === 'asc' ? '▲' : '▼') : ''}</span></th>)
+
+/* ---------- Google-Sheets-style keyword filter: contains + multi-select ---------- */
+function useKwFilter() {
+  const [contains, setContains] = useState('')
+  const [sel, setSel] = useState(() => new Set())
+  const pred = (k) => (!contains || String(k).toLowerCase().includes(contains.toLowerCase())) && (sel.size === 0 || sel.has(k))
+  const active = !!contains || sel.size > 0
+  return { contains, setContains, sel, setSel, pred, active }
+}
+function KwFilter({ all, f }) {
+  const [open, setOpen] = useState(false); const [find, setFind] = useState('')
+  const shown = useMemo(() => all.filter((k) => !find || k.toLowerCase().includes(find.toLowerCase())), [all, find])
+  return (
+    <div className="field kwf">
+      <label>Filter keywords</label>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <input placeholder="contains…" value={f.contains} onChange={(e) => f.setContains(e.target.value)} style={{ minWidth: 150 }} />
+        <button type="button" className="ghost" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+          {f.sel.size ? f.sel.size + ' picked' : 'Pick ▾'}</button>
+        {f.active && <button type="button" className="ghost" title="clear filter"
+          onClick={() => { f.setContains(''); f.setSel(new Set()) }}>✕</button>}
+      </div>
+      {open && (
+        <div className="popover" role="dialog" aria-label="Pick keywords">
+          <input placeholder="search list…" value={find} onChange={(e) => setFind(e.target.value)} autoFocus />
+          <div className="poprow">
+            <button type="button" className="ghost small" onClick={() => f.setSel(new Set(shown))}>Select shown ({shown.length})</button>
+            <button type="button" className="ghost small" onClick={() => f.setSel(new Set())}>Clear</button>
+          </div>
+          <div className="poplist">
+            {shown.slice(0, 500).map((k) => (
+              <label key={k} className="popitem">
+                <input type="checkbox" checked={f.sel.has(k)} onChange={(e) => f.setSel((s) => {
+                  const n = new Set(s); e.target.checked ? n.add(k) : n.delete(k); return n })} />
+                <span>{k}</span></label>))}
+            {!shown.length && <div className="muted small" style={{ padding: 8 }}>no matches</div>}
+          </div>
+          <button type="button" className="primary small" style={{ width: '100%' }} onClick={() => setOpen(false)}>Done</button>
+        </div>)}
+    </div>)
+}
+
+/* ---------- timeframe: month-range picker ---------- */
+function useMonthRange(months) {
+  const [from, setFrom] = useState(''); const [to, setTo] = useState('')
+  const lo = months[0], hi = months[months.length - 1]
+  useEffect(() => { setFrom(lo || ''); setTo(hi || '') }, [lo, hi])
+  const inRange = (m) => (!from || m >= from) && (!to || m <= to)
+  return { from, setFrom, to, setTo, inRange, months }
+}
+const MonthRange = ({ r }) => (
+  <>
+    <div className="field"><label>From month</label>
+      <select value={r.from} onChange={(e) => r.setFrom(e.target.value)}>{r.months.map((m) => <option key={m}>{m}</option>)}</select></div>
+    <div className="field"><label>To month</label>
+      <select value={r.to} onChange={(e) => r.setTo(e.target.value)}>{r.months.map((m) => <option key={m}>{m}</option>)}</select></div>
+  </>)
+const maxN = (a, b) => (b == null ? a : a == null ? b : Math.max(a, b))  // max ignoring null
+
 /* ---------------- Login gate (the "code" = shared account password) ---------------- */
 function Login({ onIn }) {
   const [pw, setPw] = useState(''); const [email, setEmail] = useState(VIEWER_EMAIL)
@@ -130,8 +212,10 @@ function Dashboard({ region }) {
   const [cat, setCat] = useState('Vibration Plate')
   const cats = useMemo(() => [...new Set(rows.map((r) => r.category))].sort(), [rows])
   useEffect(() => { if (cats.length && !cats.includes(cat)) setCat(cats[0]) }, [cats]) // eslint-disable-line
-  const series = useMemo(() => rows.filter((r) => r.category === cat)
-    .sort((a, b) => a.month.localeCompare(b.month)), [rows, cat])
+  const months = useMemo(() => [...new Set(rows.filter((r) => r.category === cat).map((r) => r.month))].sort(), [rows, cat])
+  const mr = useMonthRange(months)
+  const series = useMemo(() => rows.filter((r) => r.category === cat && mr.inRange(r.month))
+    .sort((a, b) => a.month.localeCompare(b.month)), [rows, cat, mr.from, mr.to])
   const last = series[series.length - 1] || {}
   if (error) return <ErrorBanner msg={error} />
   return (
@@ -143,6 +227,7 @@ function Dashboard({ region }) {
             {cats.map((c) => <option key={c}>{c}</option>)}
           </select>
         </div>
+        <MonthRange r={mr} />
       </div>
       <div className="kpis" style={{ marginBottom: 16 }}>
         <div className="kpi"><div className="v">{loading ? '…' : pct(last.our_purchase_share)}</div><div className="l">Our purchase share (latest)</div></div>
@@ -217,6 +302,7 @@ function Categories({ region }) {
     }
     return Object.values(m).sort((a, b) => b.purchases - a.purchases)
   }, [fams])
+  const { sorted, sort: sortState, toggle: sortBy } = useSort(byCat, { col: 'purchases', dir: 'desc' })
   const toggle = (c) => setOpen(open === c ? null : c)
   return (
     <div className="card">
@@ -225,9 +311,14 @@ function Categories({ region }) {
       {loading ? <SkelRows n={8} /> : !byCat.length ? <Empty /> : (
         <div className="table-scroll">
           <table>
-            <thead><tr><th>Category</th><th className="num">Families</th><th className="num">ASINs</th><th className="num">Our purchases (12mo)</th><th aria-label="expand" /></tr></thead>
+            <thead><tr>
+              <Th col="category" sort={sortState} toggle={sortBy}>Category</Th>
+              <Th col="families" sort={sortState} toggle={sortBy} num>Families</Th>
+              <Th col="asins" sort={sortState} toggle={sortBy} num>ASINs</Th>
+              <Th col="purchases" sort={sortState} toggle={sortBy} num>Our purchases (12mo)</Th>
+              <th aria-label="expand" /></tr></thead>
             <tbody>
-              {byCat.map((c) => {
+              {sorted.map((c) => {
                 const isOpen = open === c.category
                 return (
                   <React.Fragment key={c.category}>
@@ -412,6 +503,7 @@ function KeywordExplorer({ region }) {
   }, [region, debounced, category, view])
   const VIEWS = [['purchases', 'Most purchases'], ['volume', 'Top volume'], ['rising', 'Rising'], ['emerging', 'Emerging'], ['attack', 'Attack list']]
   const { rows, loading, error } = state
+  const { sorted, sort, toggle } = useSort(rows, { col: null, dir: 'desc' })
   return (
     <div>
       {sel && <KeywordDetail region={region} q={sel} onClose={() => setSel(null)} />}
@@ -438,9 +530,14 @@ function KeywordExplorer({ region }) {
         {error && <ErrorBanner msg={error} />}
         {loading ? <SkelRows n={10} /> : !rows.length ? <Empty msg="No keywords match." /> : (
           <div className="table-scroll"><table>
-            <thead><tr><th>Keyword</th><th>Category</th><th className="num">Volume/mo</th>
-              <th className="num">Our share</th><th className="num">Our purch (12mo)</th><th>Trend</th></tr></thead>
-            <tbody>{rows.map((r) => (
+            <thead><tr>
+              <Th col="search_query" sort={sort} toggle={toggle}>Keyword</Th>
+              <Th col="top_category" sort={sort} toggle={toggle}>Category</Th>
+              <Th col="latest_volume" sort={sort} toggle={toggle} num>Volume/mo</Th>
+              <Th col="our_purchase_share" sort={sort} toggle={toggle} num>Our share</Th>
+              <Th col="our_purchases_12mo" sort={sort} toggle={toggle} num>Our purch (12mo)</Th>
+              <Th col="trend" sort={sort} toggle={toggle}>Trend</Th></tr></thead>
+            <tbody>{sorted.map((r) => (
               <tr key={r.search_query} className="rowbtn" tabIndex={0} role="button"
                   onClick={() => setSel(r.search_query)}
                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSel(r.search_query) } }}>
@@ -471,18 +568,22 @@ function FamilyExplorer({ region }) {
   useEffect(() => { if (families.length && !families.includes(family)) setFamily(families[0]) }, [families]) // eslint-disable-line
   const { rows: comp, loading: cl } = useRows('family_kw_composition', family ? { region, family } : { region, family: '__none__' })
   const { rows: tk, loading: tl } = useRows('family_top_keywords', family ? { region, family } : { region, family: '__none__' })
-  const series = useMemo(() => niche.filter((r) => r.family === family).sort((a, b) => a.month.localeCompare(b.month)), [niche, family])
+  const months = useMemo(() => [...new Set(niche.filter((r) => r.family === family).map((r) => r.month))].sort(), [niche, family])
+  const mr = useMonthRange(months)
+  const series = useMemo(() => niche.filter((r) => r.family === family && mr.inRange(r.month)).sort((a, b) => a.month.localeCompare(b.month)), [niche, family, mr.from, mr.to])
   const last = series[series.length - 1] || {}
   const our12 = series.reduce((s, r) => s + (r.our_purchases || 0), 0)
+  const tkS = useSort(tk, { col: 'our_purchases_12mo', dir: 'desc' })
   const { keywords, stack } = useMemo(() => {
-    const months = [...new Set(comp.map((r) => r.month))].sort()
-    const tot = {}; comp.forEach((r) => { tot[r.keyword] = (tot[r.keyword] || 0) + r.volume })
+    const cr = comp.filter((r) => mr.inRange(r.month))
+    const ms = [...new Set(cr.map((r) => r.month))].sort()
+    const tot = {}; cr.forEach((r) => { tot[r.keyword] = (tot[r.keyword] || 0) + r.volume })
     let kws = Object.keys(tot).filter((k) => k !== 'Other').sort((a, b) => tot[b] - tot[a])
     if (tot['Other'] != null) kws.push('Other')
-    const bm = Object.fromEntries(months.map((m) => [m, { month: m }]))
-    comp.forEach((r) => { bm[r.month][r.keyword] = r.volume })
-    return { keywords: kws, stack: months.map((m) => bm[m]) }
-  }, [comp])
+    const bm = Object.fromEntries(ms.map((m) => [m, { month: m }]))
+    cr.forEach((r) => { bm[r.month][r.keyword] = r.volume })
+    return { keywords: kws, stack: ms.map((m) => bm[m]) }
+  }, [comp, mr.from, mr.to])
   if (ne) return <ErrorBanner msg={ne} />
   return (
     <div>
@@ -493,6 +594,7 @@ function FamilyExplorer({ region }) {
             {families.map((f) => <option key={f}>{f}</option>)}
           </select>
         </div>
+        <MonthRange r={mr} />
       </div>
       <div className="kpis" style={{ marginBottom: 16 }}>
         <div className="kpi"><div className="v">{nl ? '…' : kfmt(last.niche_volume)}</div><div className="l">Niche size (searches/mo)</div></div>
@@ -539,10 +641,16 @@ function FamilyExplorer({ region }) {
       </div>
       <div className="card">
         <h3>Top keywords · {family}</h3>
-        {tl ? <SkelRows n={8} /> : !tk.length ? <Empty /> : (
+        {tl ? <SkelRows n={8} /> : !tkS.sorted.length ? <Empty /> : (
           <div className="table-scroll"><table>
-            <thead><tr><th>Keyword</th><th className="num">Volume/mo</th><th className="num">Our share</th><th className="num">Our purch (12mo)</th><th>Trend</th></tr></thead>
-            <tbody>{[...tk].sort((a, b) => b.our_purchases_12mo - a.our_purchases_12mo).map((r) => (
+            <thead><tr>
+              <Th col="search_query" sort={tkS.sort} toggle={tkS.toggle}>Keyword</Th>
+              <Th col="latest_volume" sort={tkS.sort} toggle={tkS.toggle} num>Volume/mo</Th>
+              <Th col="our_purchase_share" sort={tkS.sort} toggle={tkS.toggle} num>Our share</Th>
+              <Th col="our_purchases_12mo" sort={tkS.sort} toggle={tkS.toggle} num>Our purch (12mo)</Th>
+              <Th col="trend" sort={tkS.sort} toggle={tkS.toggle}>Trend</Th>
+            </tr></thead>
+            <tbody>{tkS.sorted.map((r) => (
               <tr key={r.search_query}>
                 <td><b>{r.search_query}</b></td>
                 <td className="num">{num(r.latest_volume)}</td>
@@ -559,12 +667,15 @@ function FamilyExplorer({ region }) {
 
 /* ---------------- Ads (paid, by family) — Canada only ---------------- */
 function AdsExplorer() {
-  const { rows, loading, error } = useRows('v_ad_family_month', { region: 'CA' })
-  const [prog, setProg] = useState('SP'); const [family, setFamily] = useState('All')
-  const fr = useMemo(() => rows.filter((r) => prog === 'All' || r.program === prog), [rows, prog])
-  const families = useMemo(() => ['All', ...[...new Set(fr.filter((r) => r.family).map((r) => r.family))].sort()], [fr])
-  useEffect(() => { if (!families.includes(family)) setFamily('All') }, [families]) // eslint-disable-line
-  const scope = useMemo(() => family === 'All' ? fr : fr.filter((r) => r.family === family), [fr, family])
+  const { rows: fam, loading, error } = useRows('v_ad_family_month', { region: 'CA' })
+  const [prog, setProg] = useState('All')
+  const months = useMemo(() => [...new Set(fam.map((r) => r.month))].sort(), [fam])
+  const mr = useMonthRange(months)
+  const fr = useMemo(() => fam.filter((r) => (prog === 'All' || r.program === prog) && mr.inRange(r.month)), [fam, prog, mr.from, mr.to])
+  const families = useMemo(() => [...new Set(fr.filter((r) => r.family).map((r) => r.family))].sort(), [fr])
+  const [family, setFamily] = useState('')
+  useEffect(() => { if (families.length && !families.includes(family)) setFamily(families[0]) }, [families]) // eslint-disable-line
+  const scope = useMemo(() => fr.filter((r) => r.family === family), [fr, family])
   const series = useMemo(() => {
     const m = {}
     scope.forEach((r) => { const x = (m[r.month] = m[r.month] || { month: r.month, spend: 0, sales: 0 }); x.spend += r.spend || 0; x.sales += r.sales || 0 })
@@ -572,31 +683,50 @@ function AdsExplorer() {
   }, [scope])
   const famTable = useMemo(() => {
     const m = {}
-    fr.filter((r) => r.family).forEach((r) => { const x = (m[r.family] = m[r.family] || { family: r.family, spend: 0, sales: 0, clicks: 0 }); x.spend += r.spend || 0; x.sales += r.sales || 0; x.clicks += r.clicks || 0 })
-    return Object.values(m).map((x) => ({ ...x, acos: x.sales ? x.spend / x.sales : null })).sort((a, b) => b.spend - a.spend)
+    fr.forEach((r) => { if (!r.family) return; const x = (m[r.family] = m[r.family] || { family: r.family, spend: 0, sales: 0, clicks: 0, orders: 0 }); x.spend += r.spend || 0; x.sales += r.sales || 0; x.clicks += r.clicks || 0; x.orders += r.orders || 0 })
+    return Object.values(m).map((x) => ({ ...x, acos: x.sales ? x.spend / x.sales : null }))
   }, [fr])
-  const tot = scope.reduce((s, r) => ({ spend: s.spend + (r.spend || 0), sales: s.sales + (r.sales || 0) }), { spend: 0, sales: 0 })
+  const famS = useSort(famTable, { col: 'spend', dir: 'desc' })
+  const tot = scope.reduce((s, r) => ({ spend: s.spend + (r.spend || 0), sales: s.sales + (r.sales || 0), orders: s.orders + (r.orders || 0) }), { spend: 0, sales: 0, orders: 0 })
+
+  // deep-dive: keyword (search-term) level for the selected family
+  const { rows: terms, loading: tl } = useRows('v_ad_term_enriched', family ? { region: 'CA', family } : { region: 'CA', family: '__none__' })
+  const kf = useKwFilter()
+  const kwAgg = useMemo(() => {
+    const m = {}
+    terms.filter((r) => (prog === 'All' || r.program === prog) && mr.inRange(r.month) && kf.pred(r.keyword)).forEach((r) => {
+      const x = (m[r.keyword] = m[r.keyword] || { keyword: r.keyword, spend: 0, sales: 0, ad_clicks: 0, orders: 0, sqp_volume: null, clicks_l4w: null, impr_share: null, click_share: null, purch_share: null })
+      x.spend += r.spend || 0; x.sales += r.sales || 0; x.ad_clicks += r.clicks || 0; x.orders += r.orders || 0
+      x.sqp_volume = maxN(x.sqp_volume, r.sqp_volume); x.clicks_l4w = maxN(x.clicks_l4w, r.clicks_l4w)
+      x.impr_share = maxN(x.impr_share, r.our_impr_share); x.click_share = maxN(x.click_share, r.our_click_share); x.purch_share = maxN(x.purch_share, r.our_purchase_share)
+    })
+    return Object.values(m).map((x) => ({ ...x, acos: x.sales ? x.spend / x.sales : null }))
+  }, [terms, prog, mr.from, mr.to, kf.contains, kf.sel]) // eslint-disable-line
+  const allKw = useMemo(() => [...new Set(terms.map((r) => r.keyword))].sort(), [terms])
+  const { sorted: kwSorted, sort: kwSort, toggle: kwToggle } = useSort(kwAgg, { col: 'spend', dir: 'desc' })
+
   if (error) return <ErrorBanner msg={error} />
   return (
     <div>
       <div className="controls">
         <div className="field"><label htmlFor="ad-prog">Program</label>
           <select id="ad-prog" value={prog} onChange={(e) => setProg(e.target.value)}>
-            <option value="SP">Sponsored Products</option><option value="SB">Sponsored Brands</option><option value="All">All</option>
+            <option value="All">All programs</option><option value="SP">Sponsored Products</option><option value="SB">Sponsored Brands</option>
           </select></div>
         <div className="field"><label htmlFor="ad-fam">Family</label>
           <select id="ad-fam" value={family} onChange={(e) => setFamily(e.target.value)}>{families.map((f) => <option key={f}>{f}</option>)}</select></div>
+        <MonthRange r={mr} />
         <span className="muted small" style={{ alignSelf: 'flex-end' }}>Canada · Vendor Central ads</span>
       </div>
       <div className="kpis" style={{ marginBottom: 16 }}>
-        <div className="kpi"><div className="v">{loading ? '…' : money(tot.spend, 'CA')}</div><div className="l">Ad spend (12mo)</div></div>
+        <div className="kpi"><div className="v">{loading ? '…' : money(tot.spend, 'CA')}</div><div className="l">Ad spend · {family}</div></div>
         <div className="kpi"><div className="v">{loading ? '…' : money(tot.sales, 'CA')}</div><div className="l">Ad sales</div></div>
         <div className="kpi"><div className="v">{loading ? '…' : (tot.sales ? (tot.spend / tot.sales * 100).toFixed(0) + '%' : '—')}</div><div className="l">ACOS</div></div>
-        <div className="kpi"><div className="v">{loading ? '…' : (families.length - 1)}</div><div className="l">Families advertised</div></div>
+        <div className="kpi"><div className="v">{loading ? '…' : num(tot.orders)}</div><div className="l">Ad orders</div></div>
       </div>
       <div className="card"><h3>Spend &amp; ACOS over time · {family}</h3>
         {loading ? <SkelChart /> : !series.length ? <Empty /> : (
-          <ResponsiveContainer width="100%" height={260}><LineChart data={series} margin={{ left: -6 }}>
+          <ResponsiveContainer width="100%" height={240}><LineChart data={series} margin={{ left: -6 }}>
             <CartesianGrid stroke={C.grid} strokeDasharray="3 3" /><XAxis dataKey="month" tick={axisTick} />
             <YAxis yAxisId="s" tick={axisTick} tickFormatter={kfmt} /><YAxis yAxisId="a" orientation="right" tick={axisTick} tickFormatter={(v) => (v * 100).toFixed(0) + '%'} />
             <Tooltip contentStyle={tipStyle} /><Legend wrapperStyle={{ fontSize: 11 }} />
@@ -604,16 +734,55 @@ function AdsExplorer() {
             <Line yAxisId="a" dataKey="acos" stroke={C.warn} dot={false} name="ACOS" isAnimationActive={!REDUCED} />
           </LineChart></ResponsiveContainer>)}
       </div>
-      <div className="card"><h3>Families by ad spend</h3>
-        {loading ? <SkelRows n={8} /> : (
+      <div className="card"><h3>Families by ad spend <span className="muted small">· click a row to deep-dive</span></h3>
+        {loading ? <SkelRows n={8} /> : !famS.sorted.length ? <Empty /> : (
           <div className="table-scroll"><table>
-            <thead><tr><th>Family</th><th className="num">Spend</th><th className="num">Sales</th><th className="num">ACOS</th></tr></thead>
-            <tbody>{famTable.map((r) => (
-              <tr key={r.family} className="rowbtn" onClick={() => setFamily(r.family)}>
+            <thead><tr>
+              <Th col="family" sort={famS.sort} toggle={famS.toggle}>Family</Th>
+              <Th col="spend" sort={famS.sort} toggle={famS.toggle} num>Spend</Th>
+              <Th col="sales" sort={famS.sort} toggle={famS.toggle} num>Sales</Th>
+              <Th col="acos" sort={famS.sort} toggle={famS.toggle} num>ACOS</Th>
+              <Th col="orders" sort={famS.sort} toggle={famS.toggle} num>Orders</Th>
+            </tr></thead>
+            <tbody>{famS.sorted.map((r) => (
+              <tr key={r.family} className="rowbtn" style={{ background: r.family === family ? 'var(--panel2)' : undefined }} onClick={() => setFamily(r.family)}>
                 <td><b>{r.family}</b></td><td className="num">{money(r.spend, 'CA')}</td>
                 <td className="num">{money(r.sales, 'CA')}</td>
-                <td className="num"><span className={'badge ' + (r.acos > 0.25 ? 'down' : 'up')}>{r.acos ? (r.acos * 100).toFixed(0) + '%' : '—'}</span></td></tr>))}
+                <td className="num"><span className={'badge ' + (r.acos > 0.25 ? 'down' : r.acos ? 'up' : 'flat')}>{r.acos ? (r.acos * 100).toFixed(0) + '%' : '—'}</span></td>
+                <td className="num">{num(r.orders)}</td></tr>))}
             </tbody></table></div>)}
+      </div>
+      <div className="card"><h3>Keywords driving {family} <span className="muted small">({kwSorted.length})</span></h3>
+        <div className="controls" style={{ marginBottom: 12 }}><KwFilter all={allKw} f={kf} /></div>
+        {tl ? <SkelRows n={10} /> : !kwSorted.length ? <Empty msg={kf.active ? 'No keywords match the filter.' : 'No ad search terms for this family in range.'} /> : (
+          <div className="table-scroll"><table>
+            <thead><tr>
+              <Th col="keyword" sort={kwSort} toggle={kwToggle}>Keyword (search term)</Th>
+              <Th col="spend" sort={kwSort} toggle={kwToggle} num>Spend</Th>
+              <Th col="sales" sort={kwSort} toggle={kwToggle} num>Sales</Th>
+              <Th col="acos" sort={kwSort} toggle={kwToggle} num>ACOS</Th>
+              <Th col="orders" sort={kwSort} toggle={kwToggle} num>Orders</Th>
+              <Th col="sqp_volume" sort={kwSort} toggle={kwToggle} num>SQP vol/mo</Th>
+              <Th col="clicks_l4w" sort={kwSort} toggle={kwToggle} num>Clicks L4W</Th>
+              <Th col="impr_share" sort={kwSort} toggle={kwToggle} num>Impr %</Th>
+              <Th col="click_share" sort={kwSort} toggle={kwToggle} num>Click %</Th>
+              <Th col="purch_share" sort={kwSort} toggle={kwToggle} num>Purch %</Th>
+            </tr></thead>
+            <tbody>{kwSorted.slice(0, 400).map((r) => (
+              <tr key={r.keyword}>
+                <td><b>{r.keyword}</b></td>
+                <td className="num">{money(r.spend, 'CA')}</td>
+                <td className="num">{money(r.sales, 'CA')}</td>
+                <td className="num"><span className={'badge ' + (r.acos > 0.25 ? 'down' : r.acos ? 'up' : 'flat')}>{r.acos ? (r.acos * 100).toFixed(0) + '%' : '—'}</span></td>
+                <td className="num muted">{num(r.orders)}</td>
+                <td className="num">{r.sqp_volume == null ? '-' : num(r.sqp_volume)}</td>
+                <td className="num">{r.clicks_l4w == null ? '-' : num(r.clicks_l4w)}</td>
+                <td className="num">{r.impr_share == null ? '-' : pct(r.impr_share)}</td>
+                <td className="num">{r.click_share == null ? '-' : pct(r.click_share)}</td>
+                <td className="num">{r.purch_share == null ? '-' : pct(r.purch_share)}</td>
+              </tr>))}
+            </tbody></table></div>)}
+        <div className="muted small" style={{ marginTop: 8 }}>Spend / Sales / Orders = ad totals over the selected months. <b>SQP vol</b>, <b>Clicks L4W</b> and <b>Impr / Click / Purch %</b> are the latest-month organic &amp; market signals for that search term (“-” if not in SQP / Datarova). Click any column to sort. Showing up to 400.</div>
       </div>
     </div>
   )
@@ -627,13 +796,18 @@ function CampaignMapping() {
     .then((d) => { setRows(d.sort((a, b) => (b.spend || 0) - (a.spend || 0))); setLoading(false) })
     .catch((e) => { setErr(e.message); setLoading(false) }) }
   useEffect(load, [])
-  const families = useMemo(() => [...new Set(rows.filter((r) => r.auto_family).map((r) => r.auto_family))].sort(), [rows])
+  const families = useMemo(() => [...new Set(rows.map((r) => r.manual_family || r.auto_family).filter((x) => x && x !== 'Brand Level'))].sort(), [rows])
+  const effOf = (r) => r.manual_family || r.auto_family
   const filtered = useMemo(() => rows.filter((r) => {
-    const eff = r.manual_family || r.auto_family
-    const need = statusF === 'all' ? true : statusF === 'mapped' ? !!eff : !eff || r.status === 'brand-level'
+    const eff = effOf(r); const isBrand = eff === 'Brand Level'
+    const need = statusF === 'all' ? true
+      : statusF === 'mapped' ? (!!eff && !isBrand)
+      : statusF === 'brand' ? isBrand
+      : !eff  // 'needs'
     const txt = !q || (r.campaign_name || '').toLowerCase().includes(q.toLowerCase())
     return need && txt
   }), [rows, statusF, q])
+  const { sorted, sort, toggle } = useSort(filtered, { col: 'spend', dir: 'desc' })
   const save = async (row, val) => {
     const { error } = await supabase.from('campaign_map').update({ manual_family: val })
       .eq('program', row.program).eq('campaign_id', row.campaign_id)
@@ -641,7 +815,8 @@ function CampaignMapping() {
     setRows((rs) => rs.map((r) => (r.program === row.program && r.campaign_id === row.campaign_id ? { ...r, manual_family: val } : r)))
     setSaved(row.campaign_id + ''); setTimeout(() => setSaved(''), 1200)
   }
-  const needCount = rows.filter((r) => !(r.manual_family || r.auto_family) || r.status === 'brand-level').length
+  const needCount = rows.filter((r) => !effOf(r)).length
+  const brandCount = rows.filter((r) => effOf(r) === 'Brand Level').length
   return (
     <div>
       <div className="controls">
@@ -649,59 +824,81 @@ function CampaignMapping() {
           <input id="cm-q" value={q} onChange={(e) => setQ(e.target.value)} placeholder="campaign name…" /></div>
         <div className="field"><label htmlFor="cm-f">Show</label>
           <select id="cm-f" value={statusF} onChange={(e) => setStatusF(e.target.value)}>
-            <option value="needs">Needs mapping ({needCount})</option><option value="mapped">Mapped</option><option value="all">All</option>
+            <option value="needs">Needs mapping ({needCount})</option>
+            <option value="mapped">Mapped to a family</option>
+            <option value="brand">Brand Level ({brandCount})</option>
+            <option value="all">All</option>
           </select></div>
       </div>
       <div className="card">
         <h3>Campaign → Family mapping · Canada {saved && <span className="badge up">saved ✓</span>}</h3>
         {err && <ErrorBanner msg={err} onRetry={load} />}
-        {loading ? <SkelRows n={10} /> : !filtered.length ? <Empty msg="Nothing to map here 🎉" /> : (
+        {loading ? <SkelRows n={10} /> : !sorted.length ? <Empty msg="Nothing here." /> : (
           <div className="table-scroll"><table>
-            <thead><tr><th>Campaign</th><th>Prog</th><th className="num">Spend</th><th>ASIN</th><th>Auto family</th><th>Override</th></tr></thead>
-            <tbody>{filtered.slice(0, 200).map((r) => {
-              const eff = r.manual_family || r.auto_family
+            <thead><tr>
+              <Th col="campaign_name" sort={sort} toggle={toggle}>Campaign</Th>
+              <Th col="program" sort={sort} toggle={toggle}>Prog</Th>
+              <Th col="spend" sort={sort} toggle={toggle} num>Spend</Th>
+              <Th col="asin" sort={sort} toggle={toggle}>ASIN</Th>
+              <Th col="auto_family" sort={sort} toggle={toggle}>Auto family</Th>
+              <th>Map to</th>
+            </tr></thead>
+            <tbody>{sorted.slice(0, 300).map((r) => {
+              const eff = effOf(r)
               return (
                 <tr key={r.program + r.campaign_id}>
                   <td style={{ maxWidth: 320 }}><span className="small">{r.campaign_name}</span></td>
                   <td className="small muted">{r.program}</td>
                   <td className="num">{money(r.spend, 'CA')}</td>
                   <td className="small muted">{r.asin || '—'}</td>
-                  <td className="small">{r.auto_family || <span className="badge down">none</span>}</td>
+                  <td className="small">{r.auto_family === 'Brand Level' ? <span className="badge flat">Brand Level</span> : r.auto_family || <span className="badge down">none</span>}</td>
                   <td>
                     <select value={r.manual_family || ''} onChange={(e) => save(r, e.target.value)}
                             style={{ minHeight: 34, borderColor: eff ? 'var(--line)' : 'var(--hot)' }}>
-                      <option value="">{r.auto_family ? '(use auto)' : '— set family —'}</option>
+                      <option value="">{r.auto_family ? `(use auto: ${r.auto_family})` : '— set —'}</option>
+                      <option value="Brand Level">Brand Level</option>
                       {families.map((f) => <option key={f} value={f}>{f}</option>)}
                     </select>
                   </td>
                 </tr>)
             })}</tbody></table></div>)}
-        <div className="muted small" style={{ marginTop: 10 }}>Editing an override saves instantly to Supabase and the Ads views re-aggregate live. {needCount} campaign(s) need mapping. Showing up to 200.</div>
+        <div className="muted small" style={{ marginTop: 10 }}>Edits save instantly and the Ads views re-aggregate live. <b>Brand Level</b> = umbrella / brand campaigns that shouldn’t roll into one family (pick it for any campaign, e.g. “[Brand] All Products”). {needCount} need mapping · {brandCount} brand-level. Click a header to sort. Showing up to 300.</div>
       </div>
     </div>
   )
 }
 
-/* ---------------- Ranks (organic rank, by family) ---------------- */
+/* ---------------- Organic Ranks (by family) ---------------- */
 const rankBadge = (t) => 'badge ' + (t === 'Improving' || t === 'New' ? 'up' : t === 'Declining' || t === 'Lost' ? 'down' : 'flat')
 const rk = (v) => (v == null ? '—' : '#' + (Number.isInteger(v) ? v : v.toFixed(0)))
-function RanksExplorer({ region }) {
+function OrganicRanks({ region }) {
   const { rows: days, loading: dl, error: de } = useRows('rank_family_day', { region })
   const families = useMemo(() => [...new Set(days.map((r) => r.family))].sort(), [days])
   const [family, setFamily] = useState('')
   useEffect(() => { if (families.length && !families.includes(family)) setFamily(families[0]) }, [families]) // eslint-disable-line
-  const { rows: kws, loading: kl } = useRows('rank_family_keyword', family ? { region, family } : { region, family: '__none__' })
-  const series = useMemo(() => days.filter((r) => r.family === family).sort((a, b) => a.date.localeCompare(b.date)), [days, family])
+  const { rows: kws, loading: kl } = useRows('v_rank_kw_enriched', family ? { region, family } : { region, family: '__none__' })
+  const allDates = useMemo(() => [...new Set(days.filter((r) => r.family === family).map((r) => r.date))].sort(), [days, family])
+  const [from, setFrom] = useState(''); const [to, setTo] = useState('')
+  useEffect(() => { if (allDates.length) { setFrom(allDates[0]); setTo(allDates[allDates.length - 1]) } }, [family, allDates.length]) // eslint-disable-line
+  const series = useMemo(() => days.filter((r) => r.family === family && (!from || r.date >= from) && (!to || r.date <= to))
+    .sort((a, b) => a.date.localeCompare(b.date)), [days, family, from, to])
   const last = series[series.length - 1] || {}
-  const sortedKws = useMemo(() => [...kws].sort((a, b) => (a.latest_rank == null ? 1e6 : a.latest_rank) - (b.latest_rank == null ? 1e6 : b.latest_rank)), [kws])
+  const kf = useKwFilter()
+  const allKw = useMemo(() => [...new Set(kws.map((r) => r.keyword))].sort(), [kws])
+  const filtered = useMemo(() => kws.filter((r) => kf.pred(r.keyword)), [kws, kf.contains, kf.sel]) // eslint-disable-line
+  const { sorted, sort, toggle } = useSort(filtered, { col: 'latest_rank', dir: 'asc' })
   if (de) return <ErrorBanner msg={de} />
   return (
     <div>
       <div className="controls">
         <div className="field"><label htmlFor="rk-fam">Family</label>
           <select id="rk-fam" value={family} onChange={(e) => setFamily(e.target.value)} disabled={dl}>
-            {families.map((f) => <option key={f}>{f}</option>)}</select></div>
-        <span className="muted small" style={{ alignSelf: 'flex-end' }}>organic rank · last 30 days · lower = better</span>
+            {families.map((fam) => <option key={fam}>{fam}</option>)}</select></div>
+        <div className="field"><label htmlFor="rk-from">From</label>
+          <select id="rk-from" value={from} onChange={(e) => setFrom(e.target.value)}>{allDates.map((d) => <option key={d}>{d}</option>)}</select></div>
+        <div className="field"><label htmlFor="rk-to">To</label>
+          <select id="rk-to" value={to} onChange={(e) => setTo(e.target.value)}>{allDates.map((d) => <option key={d}>{d}</option>)}</select></div>
+        <span className="muted small" style={{ alignSelf: 'flex-end' }}>organic rank · lower = better</span>
       </div>
       <div className="kpis" style={{ marginBottom: 16 }}>
         <div className="kpi"><div className="v">{dl ? '…' : rk(last.median_rank)}</div><div className="l">Median organic rank</div></div>
@@ -729,22 +926,35 @@ function RanksExplorer({ region }) {
         <div className="muted small" style={{ marginTop: 8 }}>Left axis = # keywords ranking in top 10 / top 50. Right axis = median organic rank (inverted, so up = better).</div>
       </div>
       <div className="card">
-        <h3>Keywords by organic rank · {family}</h3>
-        {kl ? <SkelRows n={10} /> : !sortedKws.length ? <Empty /> : (
+        <h3>Keywords · {family} <span className="muted small">({sorted.length})</span></h3>
+        <div className="controls" style={{ marginBottom: 12 }}><KwFilter all={allKw} f={kf} /></div>
+        {kl ? <SkelRows n={10} /> : !sorted.length ? <Empty msg={kf.active ? 'No keywords match the filter.' : undefined} /> : (
           <div className="table-scroll"><table>
-            <thead><tr><th>Keyword</th><th className="num">Now</th><th className="num">Best</th><th className="num">Avg</th><th className="num">Ranked days</th><th>AC</th><th>Trend</th></tr></thead>
-            <tbody>{sortedKws.slice(0, 200).map((r) => (
+            <thead><tr>
+              <Th col="keyword" sort={sort} toggle={toggle}>Keyword</Th>
+              <Th col="latest_rank" sort={sort} toggle={toggle} num>Now</Th>
+              <Th col="best_rank" sort={sort} toggle={toggle} num>Best</Th>
+              <Th col="avg_rank" sort={sort} toggle={toggle} num>Avg</Th>
+              <Th col="sqp_volume" sort={sort} toggle={toggle} num>SQP vol/mo</Th>
+              <Th col="clicks_l4w" sort={sort} toggle={toggle} num>Clicks L4W</Th>
+              <Th col="days_ranked" sort={sort} toggle={toggle} num>Ranked days</Th>
+              <Th col="ac_badge" sort={sort} toggle={toggle}>AC</Th>
+              <Th col="trend" sort={sort} toggle={toggle}>Trend</Th>
+            </tr></thead>
+            <tbody>{sorted.slice(0, 400).map((r) => (
               <tr key={r.keyword}>
                 <td><b>{r.keyword}</b></td>
                 <td className="num">{rk(r.latest_rank)}</td>
                 <td className="num">{rk(r.best_rank)}</td>
                 <td className="num muted">{r.avg_rank == null ? '—' : r.avg_rank}</td>
+                <td className="num">{r.sqp_volume == null ? '-' : num(r.sqp_volume)}</td>
+                <td className="num">{r.clicks_l4w == null ? '-' : num(r.clicks_l4w)}</td>
                 <td className="num muted">{r.days_ranked}/{r.days_tracked}</td>
                 <td>{r.ac_badge ? <span className="badge up">AC</span> : ''}</td>
                 <td><span className={rankBadge(r.trend)}>{r.trend}</span></td>
               </tr>))}
             </tbody></table></div>)}
-        <div className="muted small" style={{ marginTop: 8 }}>“Now” = latest organic position (lower is better); blank = not ranked. Showing up to 200.</div>
+        <div className="muted small" style={{ marginTop: 8 }}>“Now” = latest organic position (lower is better); blank = not ranked. <b>SQP vol/mo</b> = latest-month search volume (“-” if not in SQP). <b>Clicks L4W</b> = market keyword clicks last 4 weeks (Datarova). Click any column header to sort. Showing up to 400.</div>
       </div>
     </div>
   )
@@ -761,7 +971,7 @@ export default function App() {
   }, [])
   if (!ready) return <div className="app"><SkelRows n={4} /></div>
   if (!authed) return <Login onIn={() => setAuthed(true)} />
-  const TABS = [['dash', 'Dashboard'], ['keyword', 'Keyword Explorer'], ['family', 'Family Explorer'], ['ranks', 'Ranks'], ['ads', 'Ads'], ['map', 'Campaign Map'], ['cats', 'Categories'], ['asin', 'ASIN Explorer'], ['dl', 'Downloads']]
+  const TABS = [['dash', 'Dashboard'], ['keyword', 'Keyword Explorer'], ['family', 'Family Explorer'], ['ranks', 'Organic Ranks'], ['ads', 'Ads'], ['map', 'Campaign Map'], ['cats', 'Categories'], ['asin', 'ASIN Explorer'], ['dl', 'Downloads']]
   const SI = (d) => <svg viewBox="0 0 24 24"><path d={d} /></svg>
   const ICONS = {
     dash: <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg>,
@@ -797,7 +1007,7 @@ export default function App() {
         {tab === 'dash' && <Dashboard region={region} />}
         {tab === 'keyword' && <KeywordExplorer region={region} />}
         {tab === 'family' && <FamilyExplorer region={region} />}
-        {tab === 'ranks' && <RanksExplorer region={region} />}
+        {tab === 'ranks' && <OrganicRanks region={region} />}
         {tab === 'ads' && <AdsExplorer />}
         {tab === 'map' && <CampaignMapping />}
         {tab === 'cats' && <Categories region={region} />}
