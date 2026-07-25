@@ -171,11 +171,11 @@ const maxN = (a, b) => (b == null ? a : a == null ? b : Math.max(a, b))  // max 
 
 /* ---------------- Login gate (the "code" = shared account password) ---------------- */
 function Login({ onIn }) {
-  const [pw, setPw] = useState(''); const [email, setEmail] = useState(VIEWER_EMAIL)
+  const [pw, setPw] = useState('')
   const [err, setErr] = useState(''); const [busy, setBusy] = useState(false)
   const go = async (e) => {
     e.preventDefault(); setBusy(true); setErr('')
-    const { error } = await supabase.auth.signInWithPassword({ email, password: pw })
+    const { error } = await supabase.auth.signInWithPassword({ email: VIEWER_EMAIL, password: pw })
     setBusy(false); if (error) setErr('That code didn’t work. Check it and try again.'); else onIn()
   }
   return (
@@ -183,11 +183,9 @@ function Login({ onIn }) {
       <h1 style={{ marginBottom: 14 }}>SQP Explorer <small className="muted">LifePro · US &amp; Canada</small></h1>
       <form className="card" onSubmit={go}>
         <h3>Enter access code</h3>
-        <div className="field" style={{ marginBottom: 10 }}>
-          <label htmlFor="lg-email">Email</label>
-          <input id="lg-email" type="email" autoComplete="username" value={email}
-                 onChange={(e) => setEmail(e.target.value)} />
-        </div>
+        {/* fixed shared account — hidden so password managers still pair the code, users only type the code */}
+        <input type="email" autoComplete="username" value={VIEWER_EMAIL} readOnly aria-hidden="true"
+               tabIndex={-1} style={{ position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none' }} />
         <div className="field">
           <label htmlFor="lg-code">Access code</label>
           <input id="lg-code" type="password" autoComplete="current-password" value={pw}
@@ -198,7 +196,10 @@ function Login({ onIn }) {
           {busy ? <><span className="spin" /> Checking…</> : 'Enter'}
         </button>
         {err && <div className="err" id="lg-err" role="alert">{err}</div>}
-        <div className="muted small" style={{ marginTop: 10 }}>
+        <div className="muted small" style={{ marginTop: 12 }}>
+          Don’t have the access code? Message <b>Rana Momin</b> to get access.
+        </div>
+        <div className="muted small" style={{ marginTop: 8 }}>
           Search-query-performance (SQP) share data. Figures are search-attributed, not total units.
         </div>
       </form>
