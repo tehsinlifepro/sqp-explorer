@@ -1079,6 +1079,176 @@ function OptimizeExplorer() {
   )
 }
 
+/* ---------------- Recommendations (action + reason, SellerMate-style) — Canada only ---------------- */
+const REC_TYPES = [['all', 'All'], ['cut', 'Cut waste'], ['bid', 'Bid'], ['harvest', 'Harvest'], ['recover', 'Recover'], ['reinvest', 'Reinvest'], ['placement', 'Placement'], ['variation', 'Variation']]
+const recBadge = (t) => 'badge ' + (t === 'cut' ? 'down' : t === 'reinvest' || t === 'harvest' ? 'up' : 'flat')
+function RecommendationsExplorer() {
+  const CUT_MIN = 50, HARVEST_MIN = 5, RECOVER_MIN = 100, CEIL = 0.22, REINVEST_MIN = 500, PLC_GAP = 0.03, PLC_MIN = 200, VAR_MINCLK = 20, VAR_GAP = 0.02
+  const { rows: tgt, loading: l1 } = useRows('v_targeting_enriched', { region: 'CA' })
+  const { rows: harvest, loading: l2 } = useRows('v_ad_harvest', { region: 'CA' })
+  const { rows: rankkw, loading: l3 } = useRows('v_rank_kw_enriched', { region: 'CA' })
+  const { rows: tac, loading: l4 } = useRows('v_tacos_family_month', { region: 'CA' })
+  const { rows: plc, loading: l5 } = useRows('v_placement_family_month', { region: 'CA' })
+  const { rows: adasin, loading: l6 } = useRows('v_ad_asin_month', { region: 'CA' })
+  const loading = l1 || l2 || l3 || l4 || l5 || l6
+  const [typeF, setTypeF] = useState('all'); const [familyF, setFamilyF] = useState('All')
+  const months = useMemo(() => [...new Set(tgt.map((r) => r.month))].sort(), [tgt])
+  const mr = useMonthRange(months)
+  // default to the last 3 months — recommendations should act on recent performance, not 18-month sums
+  useEffect(() => { if (months.length) mr.setFrom(months[Math.max(0, months.length - 3)]) }, [months.length]) // eslint-disable-line
+
+  // account ACoS benchmark (the "compared to overall" number SellerMate anchors reasons on)
+  const accBench = useMemo(() => {
+    let sp = 0, sa = 0; tgt.filter((r) => mr.inRange(r.month)).forEach((r) => { sp += r.spend || 0; sa += r.sales || 0 }); return sa ? sp / sa : null
+  }, [tgt, mr.from, mr.to])
+  const benchPct = accBench != null ? (accBench * 100).toFixed(0) + '%' : 'n/a'
+
+  const cuts = useMemo(() => {
+    const m = {}
+    tgt.filter((r) => mr.inRange(r.month)).forEach((r) => {
+      const k = r.campaign_id + '|' + r.ad_group_id + '|' + r.targeting + '|' + r.match_type
+      const x = (m[k] = m[k] || { family: r.family, campaign: r.campaign_name, targeting: r.targeting, match: r.match_type, spend: 0, clicks: 0, orders: 0 })
+      x.spend += r.spend || 0; x.clicks += r.clicks || 0; x.orders += r.orders || 0
+    })
+    return Object.values(m).filter((x) => x.orders === 0 && x.spend >= CUT_MIN).map((x) => ({
+      type: 'cut', family: x.family || '—', impact: x.spend,
+      action: `Negate “${x.targeting}” (${mtLabel(x.match)})${x.campaign ? ` in ${x.campaign}` : ''}`,
+      reason: `${money(x.spend, 'CA')} spent · ${num(x.clicks)} clicks · 0 orders (account ACoS ${benchPct})` }))
+  }, [tgt, mr.from, mr.to, benchPct])
+
+  // Bid optimization: efficient targets (ACoS well below account) → scale up; inefficient (well above) → trim
+  const bids = useMemo(() => {
+    if (accBench == null) return []
+    const m = {}
+    tgt.filter((r) => mr.inRange(r.month)).forEach((r) => {
+      const k = r.campaign_id + '|' + r.ad_group_id + '|' + r.targeting + '|' + r.match_type
+      const x = (m[k] = m[k] || { family: r.family, targeting: r.targeting, match: r.match_type, spend: 0, sales: 0, orders: 0, bid: null })
+      x.spend += r.spend || 0; x.sales += r.sales || 0; x.orders += r.orders || 0; x.bid = maxN(x.bid, r.keyword_bid)
+    })
+    const out = []
+    Object.values(m).forEach((x) => {
+      if (!x.sales || x.orders < 3) return          // need real conversions to judge a bid
+      const acos = x.spend / x.sales; const now = x.bid ? ` — now ${money(x.bid, 'CA')}` : ''
+      if (acos < accBench * 0.75 && x.spend >= 30)
+        out.push({ type: 'bid', family: x.family || '—', impact: Math.max(0, accBench * x.sales - x.spend),   // absorbable headroom at benchmark
+          action: `Increase bid on “${x.targeting}” (${mtLabel(x.match)})${now}`,
+          reason: `ACoS ${(acos * 100).toFixed(0)}% vs account ${benchPct} · efficient — room to scale` })
+      else if (acos > accBench * 1.5 && x.spend >= 50)
+        out.push({ type: 'bid', family: x.family || '—', impact: Math.max(0, (acos - accBench) * x.sales),     // spend above benchmark
+          action: `Decrease bid on “${x.targeting}” (${mtLabel(x.match)})${now}`,
+          reason: `ACoS ${(acos * 100).toFixed(0)}% vs account ${benchPct} · inefficient — trim bid` })
+    })
+    return out
+  }, [tgt, mr.from, mr.to, accBench, benchPct])
+
+  const harvests = useMemo(() => harvest.filter((h) => (h.orders || 0) >= HARVEST_MIN && !/^b0[a-z0-9]{8}$/i.test(h.term || '')).map((h) => {
+    const acos = h.sales ? h.spend / h.sales : null
+    return { type: 'harvest', family: h.family || '—', impact: h.sales || 0,
+      action: `Add “${h.term}” as an exact target`,
+      reason: `${num(h.orders)} orders · ${money(h.sales, 'CA')} sales${acos != null ? ` · ACoS ${(acos * 100).toFixed(0)}% vs account ${benchPct}` : ''} · not yet exact` }
+  }), [harvest, benchPct])
+
+  const recovers = useMemo(() => rankkw.filter((r) => r.latest_rank != null && r.latest_rank <= 10 && (r.ad_spend || 0) >= RECOVER_MIN).map((r) => ({
+    type: 'recover', family: r.family || '—', impact: r.ad_spend || 0,
+    action: `Pull back ads on “${r.keyword}”`,
+    reason: `ranks #${r.latest_rank} organically · still ${money(r.ad_spend, 'CA')} in ads` })), [rankkw])
+
+  const reinvests = useMemo(() => {
+    const m = {}
+    tac.filter((r) => mr.inRange(r.month) && r.ordered_rev > 0).forEach((r) => {
+      const x = (m[r.family] = m[r.family] || { family: r.family, sales: 0, spend: 0 }); x.sales += r.ordered_rev || 0; x.spend += r.ad_spend || 0 })
+    return Object.values(m).map((x) => { const t = x.sales ? x.spend / x.sales : null; return { family: x.family, t, head: t != null ? Math.max(0, (CEIL - t)) * x.sales : 0 } })
+      .filter((x) => x.family && x.t != null && x.head >= REINVEST_MIN).map((x) => ({
+        type: 'reinvest', family: x.family, impact: x.head,
+        action: `Increase budget on ${x.family}`,
+        reason: `TACOS ${(x.t * 100).toFixed(1)}% vs ${(CEIL * 100).toFixed(0)}% ceiling · ${money(x.head, 'CA')} room` }))
+  }, [tac, mr.from, mr.to])
+
+  const placements = useMemo(() => {
+    const m = {}
+    plc.filter((r) => mr.inRange(r.month)).forEach((r) => {
+      const x = (m[r.family] = m[r.family] || { family: r.family, tosSpend: 0, tosSales: 0, othSpend: 0, othSales: 0, spend: 0 })
+      const isTOS = (r.placement_type || '').startsWith('Top of Search'); x.spend += r.spend || 0
+      if (isTOS) { x.tosSpend += r.spend || 0; x.tosSales += r.sales || 0 } else { x.othSpend += r.spend || 0; x.othSales += r.sales || 0 }
+    })
+    return Object.values(m).map((x) => ({ ...x, tos: x.tosSales ? x.tosSpend / x.tosSales : null, oth: x.othSales ? x.othSpend / x.othSales : null, share: x.spend ? x.tosSpend / x.spend : 0 }))
+      .filter((x) => x.family && x.tos != null && x.oth != null && x.tos + PLC_GAP < x.oth && x.share < 0.6 && x.spend >= PLC_MIN).map((x) => ({
+        type: 'placement', family: x.family, impact: Math.max(0, (x.oth - x.tos) * x.othSales),   // est. savings if non-TOS ran at TOS efficiency
+        action: `Shift budget toward Top of Search for ${x.family}`,
+        reason: `Top-of-Search ACoS ${(x.tos * 100).toFixed(0)}% vs ${(x.oth * 100).toFixed(0)}% elsewhere · TOS only ${(x.share * 100).toFixed(0)}% of spend` }))
+  }, [plc, mr.from, mr.to])
+
+  const variations = useMemo(() => {
+    const byFam = {}
+    adasin.filter((r) => mr.inRange(r.month) && r.family).forEach((r) => {
+      const f = (byFam[r.family] = byFam[r.family] || {}); const x = (f[r.asin] = f[r.asin] || { asin: r.asin, clicks: 0, orders: 0, spend: 0 })
+      x.clicks += r.clicks || 0; x.orders += r.orders || 0; x.spend += r.spend || 0
+    })
+    const out = []
+    Object.entries(byFam).forEach(([fam, kids]) => {
+      const arr = Object.values(kids).map((k) => ({ ...k, cvr: k.clicks ? k.orders / k.clicks : null })).filter((k) => k.clicks >= VAR_MINCLK)
+      if (arr.length < 2) return
+      const bestCvr = [...arr].sort((a, b) => (b.cvr || 0) - (a.cvr || 0))[0]
+      const topSpend = [...arr].sort((a, b) => b.spend - a.spend)[0]
+      if (bestCvr.asin !== topSpend.asin && bestCvr.cvr != null && topSpend.cvr != null && bestCvr.cvr - topSpend.cvr >= VAR_GAP)
+        out.push({ type: 'variation', family: fam, impact: topSpend.spend,
+          action: `Advertise ${bestCvr.asin} more in ${fam}`,
+          reason: `child CVR ${(bestCvr.cvr * 100).toFixed(0)}% vs ${(topSpend.cvr * 100).toFixed(0)}% on the current top-spend child` })
+    })
+    return out
+  }, [adasin, mr.from, mr.to])
+
+  const all = useMemo(() => [...cuts, ...bids, ...harvests, ...recovers, ...reinvests, ...placements, ...variations], [cuts, bids, harvests, recovers, reinvests, placements, variations])
+  const families = useMemo(() => ['All', ...[...new Set(all.map((r) => r.family))].filter((f) => f && f !== '—').sort()], [all])
+  const shown = useMemo(() => all.filter((r) => (typeF === 'all' || r.type === typeF) && (familyF === 'All' || r.family === familyF)), [all, typeF, familyF])
+  const { sorted, sort, toggle } = useSort(shown, { col: 'impact', dir: 'desc' })
+  const atStake = shown.reduce((s, r) => s + (r.impact || 0), 0)
+  const tLabel = Object.fromEntries(REC_TYPES.map(([k, v]) => [k, v]))
+
+  return (
+    <div>
+      <div className="controls">
+        <div className="field"><label htmlFor="rec-fam">Family</label>
+          <select id="rec-fam" value={familyF} onChange={(e) => setFamilyF(e.target.value)}>{families.map((f) => <option key={f}>{f}</option>)}</select></div>
+        <MonthRange r={mr} />
+        <span className="muted small" style={{ alignSelf: 'flex-end' }}>Canada · rule-based (no AI guessing)</span>
+      </div>
+      <div className="kpis" style={{ marginBottom: 16 }}>
+        <div className="kpi"><div className="v">{loading ? '…' : num(shown.length)}</div><div className="l">Recommendations</div></div>
+        <div className="kpi"><div className="v">{loading ? '…' : money(atStake, 'CA')}</div><div className="l">C$ at stake (shown)</div></div>
+        <div className="kpi"><div className="v">{loading ? '…' : benchPct}</div><div className="l">Account ACoS (benchmark)</div></div>
+        <div className="kpi"><div className="v">{loading ? '…' : num(shown.filter((r) => r.type === 'reinvest').length)}</div><div className="l">Reinvest opportunities</div></div>
+      </div>
+      <div className="tabs" role="tablist" aria-label="Recommendation types" style={{ marginBottom: 14 }}>
+        {REC_TYPES.map(([id, label]) => (
+          <button key={id} className={'tab' + (typeF === id ? ' active' : '')} role="tab" aria-selected={typeF === id}
+                  onClick={() => setTypeF(id)}>{label}{id !== 'all' && <span className="muted small" style={{ marginLeft: 6 }}>{all.filter((r) => r.type === id).length}</span>}</button>))}
+      </div>
+      <div className="card"><h3>What to do next <span className="muted small">· action + the numbers behind it · sorted by C$ at stake</span></h3>
+        {loading ? <SkelRows n={12} /> : !sorted.length ? <Empty msg="No recommendations for this selection — clean." /> : (
+          <div className="table-scroll"><table>
+            <thead><tr>
+              <Th col="type" sort={sort} toggle={toggle}>Type</Th>
+              <Th col="family" sort={sort} toggle={toggle}>Family</Th>
+              <Th col="action" sort={sort} toggle={toggle}>Recommendation</Th>
+              <Th col="reason" sort={sort} toggle={toggle}>Reason</Th>
+              <Th col="impact" sort={sort} toggle={toggle} num>C$ at stake</Th>
+            </tr></thead>
+            <tbody>{sorted.slice(0, 500).map((r, i) => (
+              <tr key={i}>
+                <td><span className={recBadge(r.type)}>{tLabel[r.type]}</span></td>
+                <td className="small muted">{r.family}</td>
+                <td><b>{r.action}</b></td>
+                <td className="muted small">{r.reason}</td>
+                <td className="num">{money(r.impact, 'CA')}</td>
+              </tr>))}
+            </tbody></table></div>)}
+        <div className="muted small" style={{ marginTop: 8 }}>Every recommendation is derived from your own data (rule-based — no AI guessing), each reason benchmarked against your account ACoS. <b>C$ at stake</b> = spend saved (Cut/Recover), over-benchmark spend or absorbable headroom (Bid), sales in play (Harvest), headroom to deploy (Reinvest), est. savings (Placement), or reallocatable spend (Variation). <b>Harvest &amp; Recover use lifetime data</b>; the month range drives the other types. Canada · Sponsored Products. Showing up to 500.</div>
+      </div>
+    </div>
+  )
+}
+
 /* ---------------- Campaign Map (editable, read-write) ---------------- */
 function CampaignMapping() {
   const [rows, setRows] = useState([]); const [loading, setLoading] = useState(true); const [err, setErr] = useState(null)
@@ -1371,7 +1541,7 @@ export default function App() {
   }, [authed])
   if (!ready) return <div className="app"><SkelRows n={4} /></div>
   if (!authed) return <Login onIn={() => setAuthed(true)} />
-  const TABS = [['dash', 'Dashboard'], ['keyword', 'Keyword Explorer'], ['family', 'Family Explorer'], ['ranks', 'Organic Ranks'], ['ads', 'Ads'], ['tacos', 'TACOS'], ['opt', 'Optimize'], ['map', 'Campaign Map'], ['cats', 'Categories'], ['asin', 'ASIN Explorer'], ['catalog', 'Catalog'], ['dl', 'Downloads']]
+  const TABS = [['dash', 'Dashboard'], ['keyword', 'Keyword Explorer'], ['family', 'Family Explorer'], ['ranks', 'Organic Ranks'], ['ads', 'Ads'], ['tacos', 'TACOS'], ['opt', 'Optimize'], ['rec', 'Recommendations'], ['map', 'Campaign Map'], ['cats', 'Categories'], ['asin', 'ASIN Explorer'], ['catalog', 'Catalog'], ['dl', 'Downloads']]
   const SI = (d) => <svg viewBox="0 0 24 24"><path d={d} /></svg>
   const ICONS = {
     dash: <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg>,
@@ -1381,6 +1551,7 @@ export default function App() {
     ads: SI('M3 12h4l3 8 4-16 3 8h4'),
     tacos: <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="3.5" /><path d="M12 3v3M12 18v3M3 12h3M18 12h3" /></svg>,
     opt: SI('M3 6h18M7 12h10M10 18h4'),
+    rec: SI('M9 18h6M10 22h4M12 2a7 7 0 00-4 12c.5.5 1 1.5 1 3h6c0-1.5.5-2.5 1-3a7 7 0 00-4-12z'),
     map: SI('M9 3l6 3 6-3v15l-6 3-6-3-6 3V6zM9 3v15M15 6v15'),
     cats: <svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2" /><path d="M4 10h16" /></svg>,
     asin: SI('M20 7l-8-4-8 4 8 4 8-4zM4 7v10l8 4 8-4V7M12 11v10'),
@@ -1414,6 +1585,7 @@ export default function App() {
         {tab === 'ads' && <AdsExplorer />}
         {tab === 'tacos' && <TacosExplorer />}
         {tab === 'opt' && <OptimizeExplorer />}
+        {tab === 'rec' && <RecommendationsExplorer />}
         {tab === 'map' && <CampaignMapping />}
         {tab === 'cats' && <Categories region={region} />}
         {tab === 'asin' && <AsinExplorer region={region} />}
