@@ -8,6 +8,9 @@ Run: python3 build_keyword_tables.py
 import pandas as pd, numpy as np, os
 CA=os.path.expanduser("~/Downloads/SQP Analysis Canada")
 OUT=os.path.expanduser("~/Downloads/sqp-explorer/data_export"); os.makedirs(OUT,exist_ok=True)
+import sys, re
+sys.path.insert(0, os.path.join(CA,"5_Pipeline")); from sqp_config import REGEX
+CRX={c:re.compile(rx,re.I) for c,rx in REGEX.items() if c!='Other'}  # intent filters for on-category validation
 MASTERS={"CA":os.path.join(CA,"4_Data","LifePro_CA_SQP_master.csv"),
          "US":os.path.join(CA,"USA SQP","4_Data","LifePro_US_SQP_master.csv")}
 NUM=['search_query_volume','total_query_impression_count','total_click_count','total_cart_add_count',
@@ -21,7 +24,8 @@ for region,path in MASTERS.items():
         if c in df.columns: df[c]=pd.to_numeric(df[c],errors='coerce')
     df['month']=pd.to_datetime(df['start_date']).dt.to_period('M').astype(str)
     df=df[df['search_query'].notna() & (df['search_query'].astype(str).str.strip()!='')].copy()  # drop blank queries
-    MONTHS=sorted(df['month'].unique()); f3,l3=set(MONTHS[:3]),set(MONTHS[-3:])
+    MONTHS=sorted(df['month'].unique())
+    _w=max(1,min(3,len(MONTHS)//2)); f3,l3=set(MONTHS[:_w]),set(MONTHS[-_w:])  # non-overlapping windows (works at 4mo)
 
     # query_asin_month (drill: which ASIN wins the query)
     a=df[['search_query','asin','category','family','month','search_query_volume',
@@ -50,11 +54,21 @@ for region,path in MASTERS.items():
     qm.insert(0,'region',region)
     qmon.append(qm)
 
-    # top category per query (by our purchases, fallback impressions)
-    cat=(df.groupby(['search_query','category']).agg(p=('asin_purchase_count','sum'),
+    # top category per query: rank our-present categories by our purchases, then keep the first
+    # whose intent regex the query actually matches; else any category regex; else 'Other'.
+    # (Stops broad terms like "vibrator"/"fitness equipment" from being bucketed into a category.)
+    _catg=(df.groupby(['search_query','category']).agg(p=('asin_purchase_count','sum'),
         i=('asin_impression_count','sum')).reset_index()
-        .sort_values(['search_query','p','i'],ascending=[True,False,False])
-        .drop_duplicates('search_query').set_index('search_query')['category'])
+        .sort_values(['search_query','p','i'],ascending=[True,False,False]))
+    _cand=_catg.groupby('search_query')['category'].apply(list)
+    def assign_cat(q):
+        s=str(q)
+        for c in _cand.get(q,[]):
+            rx=CRX.get(c)
+            if rx and rx.search(s): return c
+        for c,rx in CRX.items():
+            if rx.search(s): return c
+        return 'Other'
 
     # query_summary per query
     g=qm.groupby('search_query')
@@ -67,12 +81,13 @@ for region,path in MASTERS.items():
         latest=qd.iloc[-1]
         our_l3=qd[qd.month.isin(l3)].our_purchases.sum()
         mkt_l3=qd[qd.month.isin(l3)].market_purchases.sum()
-        if pl and not pf: trend='Emerging'
-        elif pf and not pl: trend='Fading'
+        VF=50  # volume floor: only flag Emerging/Fading for keywords with real demand (not long-tail churn)
+        if pl and not pf: trend='Emerging' if (voll or 0)>=VF else 'Stable'
+        elif pf and not pl: trend='Fading' if (volf or 0)>=VF else 'Stable'
         elif pd.notna(volf) and pd.notna(voll) and volf>0:
             ch=(voll-volf)/volf; trend='Rising' if ch>=0.25 else 'Declining' if ch<=-0.25 else 'Stable'
         else: trend='Stable'
-        rows.append(dict(region=region,search_query=q,top_category=cat.get(q,'—'),
+        rows.append(dict(region=region,search_query=q,top_category=assign_cat(q),
             latest_volume=int(latest.search_query_volume),
             avg_volume=int(round(qd.search_query_volume.mean())),
             our_purchases_12mo=int(qd.our_purchases.sum()),

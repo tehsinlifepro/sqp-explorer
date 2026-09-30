@@ -562,7 +562,7 @@ function KeywordExplorer({ region }) {
                 <td className="num">{num(r.latest_volume)}</td>
                 <td className="num">{pct(r.our_purchase_share)}</td>
                 <td className="num">{num(r.our_purchases_12mo)}</td>
-                <td><span className={trendBadge(r.trend)}>{r.trend}</span></td>
+                <td><span className={trendBadge(r.trend)}>{r.trend}</span>{r.growth != null && <span className="muted small" style={{ marginLeft: 6 }}>{r.growth > 0 ? '+' : ''}{Math.round(r.growth * 100)}%</span>}</td>
               </tr>))}
             </tbody></table></div>
         )}
@@ -672,7 +672,7 @@ function FamilyExplorer({ region }) {
                 <td className="num">{num(r.latest_volume)}</td>
                 <td className="num">{pct(r.our_purchase_share)}</td>
                 <td className="num">{num(r.our_purchases_12mo)}</td>
-                <td><span className={trendBadge(r.trend)}>{r.trend}</span></td>
+                <td><span className={trendBadge(r.trend)}>{r.trend}</span>{r.growth != null && <span className="muted small" style={{ marginLeft: 6 }}>{r.growth > 0 ? '+' : ''}{Math.round(r.growth * 100)}%</span>}</td>
               </tr>))}
             </tbody></table></div>
         )}
