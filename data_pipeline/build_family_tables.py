@@ -8,8 +8,9 @@ Run: python3 build_family_tables.py
 import pandas as pd, numpy as np, os
 CA=os.path.expanduser("~/Downloads/SQP Analysis Canada")
 OUT=os.path.expanduser("~/Downloads/sqp-explorer/data_export"); os.makedirs(OUT,exist_ok=True)
-MASTERS={"CA":os.path.join(CA,"4_Data","LifePro_CA_SQP_master.csv"),
-         "US":os.path.join(CA,"USA SQP","4_Data","LifePro_US_SQP_master.csv")}
+GRAIN=os.environ.get('GRAIN','month'); PKEY='month' if GRAIN=='month' else 'week'; MSUF='' if GRAIN=='month' else '_weekly'
+MASTERS={"CA":os.path.join(CA,"4_Data",f"LifePro_CA_SQP{MSUF}_master.csv"),
+         "US":os.path.join(CA,"USA SQP","4_Data",f"LifePro_US_SQP{MSUF}_master.csv")}
 NUMC=['search_query_volume','total_query_impression_count','total_purchase_count',
       'asin_impression_count','asin_click_count','asin_purchase_count']
 
@@ -17,7 +18,8 @@ fnm_all=[]; comp_all=[]; ftk_all=[]
 for region,path in MASTERS.items():
     df=pd.read_csv(path)
     for c in NUMC: df[c]=pd.to_numeric(df[c],errors='coerce')
-    df['month']=pd.to_datetime(df['start_date']).dt.to_period('M').astype(str)
+    df['month']=(pd.to_datetime(df['start_date']).dt.to_period('M').astype(str) if GRAIN=='month'
+                 else pd.to_datetime(df['start_date']).dt.to_period('W').apply(lambda p:p.start_time.date().isoformat()))
     df=df[df['search_query'].notna() & (df['search_query'].astype(str).str.strip()!='') & df['family'].notna()].copy()
     MONTHS=sorted(df['month'].unique()); f3,l3=set(MONTHS[:3]),set(MONTHS[-3:])
 
@@ -81,10 +83,13 @@ COMP=pd.concat(comp_all,ignore_index=True); COMP['volume']=COMP['volume'].fillna
 FTK=pd.concat(ftk_all,ignore_index=True)
 for col in ['latest_volume','our_purchases_12mo']:
     FTK[col]=FTK[col].fillna(0).round().astype(int)
-FNM.to_csv(os.path.join(OUT,"family_niche_month.csv"),index=False)
-COMP.to_csv(os.path.join(OUT,"family_kw_composition.csv"),index=False)
-FTK.to_csv(os.path.join(OUT,"family_top_keywords.csv"),index=False)
-for n in ["family_niche_month","family_kw_composition","family_top_keywords"]:
+if GRAIN=='week':
+    FNM=FNM.rename(columns={'month':'week'}); COMP=COMP.rename(columns={'month':'week'})
+_ftksuf='' if GRAIN=='month' else '_week'
+FNM.to_csv(os.path.join(OUT,f"family_niche_{PKEY}.csv"),index=False)
+COMP.to_csv(os.path.join(OUT,f"family_kw_composition{_ftksuf}.csv"),index=False)
+FTK.to_csv(os.path.join(OUT,f"family_top_keywords{_ftksuf}.csv"),index=False)
+for n in [f"family_niche_{PKEY}",f"family_kw_composition{_ftksuf}",f"family_top_keywords{_ftksuf}"]:
     print(f"  {n:<22} rows={sum(1 for _ in open(os.path.join(OUT,n+'.csv')))-1:,}")
 fnm=pd.concat(fnm_all)
 r=fnm[(fnm.region=='US')&(fnm.family=='Waver')].sort_values('month')

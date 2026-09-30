@@ -9,8 +9,11 @@ CA=os.path.expanduser("~/Downloads/SQP Analysis Canada")
 sys.path.insert(0, os.path.join(CA,"5_Pipeline")); from sqp_config import REGEX
 OUT=os.path.expanduser("~/Downloads/sqp-explorer/data_export"); os.makedirs(OUT,exist_ok=True)
 
-MASTERS={"CA":os.path.join(CA,"4_Data","LifePro_CA_SQP_master.csv"),
-         "US":os.path.join(CA,"USA SQP","4_Data","LifePro_US_SQP_master.csv")}
+# GRAIN switch: 'month' (default) or 'week'. Weekly reads the weekly masters, buckets start_date to
+# the ISO (Mon-start) week-start date, and writes *_week tables (period column renamed month->week).
+GRAIN=os.environ.get('GRAIN','month'); PKEY='month' if GRAIN=='month' else 'week'; MSUF='' if GRAIN=='month' else '_weekly'
+MASTERS={"CA":os.path.join(CA,"4_Data",f"LifePro_CA_SQP{MSUF}_master.csv"),
+         "US":os.path.join(CA,"USA SQP","4_Data",f"LifePro_US_SQP{MSUF}_master.csv")}
 NUM=['search_query_volume','total_query_impression_count','total_click_count','total_cart_add_count',
  'total_purchase_count','asin_impression_count','asin_click_count','asin_cart_add_count','asin_purchase_count',
  'total_median_purchase_price_amount','asin_median_purchase_price_amount']
@@ -22,7 +25,8 @@ catalog=[]; cat_month=[]; fam_sum=[]; asin_month=[]
 for region,path in MASTERS.items():
     df=pd.read_csv(path)
     for c in NUM: df[c]=pd.to_numeric(df[c],errors='coerce')
-    df['month']=pd.to_datetime(df['start_date']).dt.to_period('M').astype(str)
+    df['month']=(pd.to_datetime(df['start_date']).dt.to_period('M').astype(str) if GRAIN=='month'
+                 else pd.to_datetime(df['start_date']).dt.to_period('W').apply(lambda p:p.start_time.date().isoformat()))
     MONTHS=sorted(df['month'].unique())
     # catalog
     meta_cols=[c for c in ['brand','model','sku','family','category','ppc_listing','product_manager'] if c in df.columns]
@@ -73,18 +77,21 @@ for region,path in MASTERS.items():
                     cart_adds=int(pm.asin_cart_add_count.sum()),purchases=int(pm.asin_purchase_count.sum()),
                     purchases_all_query=int(pmall.asin_purchase_count.sum())))
 
-pd.concat(catalog,ignore_index=True).to_csv(os.path.join(OUT,"catalog.csv"),index=False)
-pd.DataFrame(cat_month).to_csv(os.path.join(OUT,"category_month.csv"),index=False)
-pd.DataFrame(fam_sum).to_csv(os.path.join(OUT,"family_summary.csv"),index=False)
-pd.DataFrame(asin_month).to_csv(os.path.join(OUT,"asin_month.csv"),index=False)
-print("Wrote CSVs to", OUT)
-for n,df_ in [("catalog",pd.concat(catalog)),("category_month",pd.DataFrame(cat_month)),
-              ("family_summary",pd.DataFrame(fam_sum)),("asin_month",pd.DataFrame(asin_month))]:
+def _out(df_, table):
+    if GRAIN=='week' and 'month' in df_.columns: df_=df_.rename(columns={'month':'week'})
+    df_.to_csv(os.path.join(OUT,f"{table}.csv"),index=False); return df_
+_out(pd.DataFrame(cat_month), f"category_{PKEY}")
+_out(pd.DataFrame(asin_month), f"asin_{PKEY}")
+if GRAIN=='month':                          # catalog is user-managed + family_summary is a snapshot: monthly run only
+    pd.concat(catalog,ignore_index=True).to_csv(os.path.join(OUT,"catalog.csv"),index=False)
+    pd.DataFrame(fam_sum).to_csv(os.path.join(OUT,"family_summary.csv"),index=False)
+print(f"Wrote {GRAIN} CSVs to", OUT)
+for n,df_ in [(f"category_{PKEY}",pd.DataFrame(cat_month)),(f"asin_{PKEY}",pd.DataFrame(asin_month))]:
     print(f"  {n:<16} rows={len(df_):,}")
-# sanity check vs known QC'd values
-am=pd.DataFrame(asin_month)
-chk=am[(am.region=='US')&(am.asin=='B07P5GV3VX')&(am.month=='2026-06')]
-print("\nSanity: US B07P5GV3VX 2026-06 core purchases =", int(chk.purchases.iloc[0]), "(expected 2779)")
-cm=pd.DataFrame(cat_month)
-chk2=cm[(cm.region=='CA')&(cm.category=='Vibration Plate')&(cm.month=='2026-06')]
-print("Sanity: CA Vibration Plate 2026-06 our_purchases =", int(chk2.our_purchases.iloc[0]), "(expected 428)")
+if GRAIN=='month':                          # sanity checks are keyed to known monthly values
+    am=pd.DataFrame(asin_month)
+    chk=am[(am.region=='US')&(am.asin=='B07P5GV3VX')&(am.month=='2026-06')]
+    print("\nSanity: US B07P5GV3VX 2026-06 core purchases =", int(chk.purchases.iloc[0]), "(expected 2779)")
+    cm=pd.DataFrame(cat_month)
+    chk2=cm[(cm.region=='CA')&(cm.category=='Vibration Plate')&(cm.month=='2026-06')]
+    print("Sanity: CA Vibration Plate 2026-06 our_purchases =", int(chk2.our_purchases.iloc[0]), "(expected 428)")

@@ -10,6 +10,8 @@ const num = (x) => (x == null ? '—' : Number(x).toLocaleString())
 const money = (x, r) => (x == null ? '—' : (r === 'CA' ? 'C$' : '$') + Number(x).toFixed(0))
 const MON_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
 const fmtMonth = (m) => { if (!m) return ''; const [y, mm] = String(m).split('-'); return `${MON_ABBR[(+mm) - 1] || mm} ${y}` }
+const fmtWeek = (d) => { if (!d) return ''; const [, m, dd] = String(d).split('-'); return `Wk ${MON_ABBR[(+m) - 1] || m} ${+dd}` }
+const fmtPeriod = (grain, key) => (grain === 'week' ? fmtWeek(key) : fmtMonth(key))
 
 // centralized chart tokens (light theme — mirror styles.css)
 const C = { grid: '#ece7de', axis: '#9a938a', tip: '#ffffff', line: '#0f766e',
@@ -170,6 +172,15 @@ const MonthRange = ({ r }) => (
       <select value={r.to} onChange={(e) => r.setTo(e.target.value)}>{r.months.map((m) => <option key={m}>{m}</option>)}</select></div>
   </>)
 const maxN = (a, b) => (b == null ? a : a == null ? b : Math.max(a, b))  // max ignoring null
+// grain (Monthly/Weekly): usePeriodRange is the grain-agnostic range hook (keys are opaque sortable strings)
+const usePeriodRange = useMonthRange
+const GrainToggle = ({ grain, setGrain }) => (
+  <div className="field"><label>Granularity</label>
+    <div className="tabs" role="tablist" aria-label="Granularity">
+      {[['month', 'Monthly'], ['week', 'Weekly']].map(([id, l]) => (
+        <button key={id} type="button" className={'tab' + (grain === id ? ' active' : '')} role="tab"
+                aria-selected={grain === id} onClick={() => setGrain(id)}>{l}</button>))}
+    </div></div>)
 
 /* ---------------- Login gate (the "code" = shared account password) ---------------- */
 function Login({ onIn }) {

@@ -11,8 +11,9 @@ OUT=os.path.expanduser("~/Downloads/sqp-explorer/data_export"); os.makedirs(OUT,
 import sys, re
 sys.path.insert(0, os.path.join(CA,"5_Pipeline")); from sqp_config import REGEX
 CRX={c:re.compile(rx,re.I) for c,rx in REGEX.items() if c!='Other'}  # intent filters for on-category validation
-MASTERS={"CA":os.path.join(CA,"4_Data","LifePro_CA_SQP_master.csv"),
-         "US":os.path.join(CA,"USA SQP","4_Data","LifePro_US_SQP_master.csv")}
+GRAIN=os.environ.get('GRAIN','month'); PKEY='month' if GRAIN=='month' else 'week'; MSUF='' if GRAIN=='month' else '_weekly'
+MASTERS={"CA":os.path.join(CA,"4_Data",f"LifePro_CA_SQP{MSUF}_master.csv"),
+         "US":os.path.join(CA,"USA SQP","4_Data",f"LifePro_US_SQP{MSUF}_master.csv")}
 NUM=['search_query_volume','total_query_impression_count','total_click_count','total_cart_add_count',
  'total_purchase_count','asin_impression_count','asin_click_count','asin_cart_add_count','asin_purchase_count',
  'total_median_purchase_price_amount','asin_impression_share','asin_click_share','asin_purchase_share']
@@ -22,7 +23,8 @@ for region,path in MASTERS.items():
     df=pd.read_csv(path)
     for c in NUM:
         if c in df.columns: df[c]=pd.to_numeric(df[c],errors='coerce')
-    df['month']=pd.to_datetime(df['start_date']).dt.to_period('M').astype(str)
+    df['month']=(pd.to_datetime(df['start_date']).dt.to_period('M').astype(str) if GRAIN=='month'
+                 else pd.to_datetime(df['start_date']).dt.to_period('W').apply(lambda p:p.start_time.date().isoformat()))
     df=df[df['search_query'].notna() & (df['search_query'].astype(str).str.strip()!='')].copy()  # drop blank queries
     MONTHS=sorted(df['month'].unique())
     _w=max(1,min(3,len(MONTHS)//2)); f3,l3=set(MONTHS[:_w]),set(MONTHS[-_w:])  # non-overlapping windows (works at 4mo)
@@ -96,10 +98,14 @@ for region,path in MASTERS.items():
             months_present=int(qd.month.nunique()),trend=trend))
     qsum.append(pd.DataFrame(rows))
 
-pd.concat(qsum,ignore_index=True).to_csv(os.path.join(OUT,"query_summary.csv"),index=False)
-pd.concat(qmon,ignore_index=True).to_csv(os.path.join(OUT,"query_month.csv"),index=False)
-pd.concat(qam,ignore_index=True).to_csv(os.path.join(OUT,"query_asin_month.csv"),index=False)
-for n in ["query_summary","query_month","query_asin_month"]:
+def _out(frames, table):
+    d=pd.concat(frames,ignore_index=True)
+    if GRAIN=='week' and 'month' in d.columns: d=d.rename(columns={'month':'week'})
+    d.to_csv(os.path.join(OUT,f"{table}.csv"),index=False); return d
+_out(qsum, "query_summary"+('' if GRAIN=='month' else '_week'))
+_out(qmon, f"query_{PKEY}")
+_out(qam, f"query_asin_{PKEY}")
+for n in ([f"query_{PKEY}",f"query_asin_{PKEY}","query_summary"+('' if GRAIN=='month' else '_week')]):
     print(f"  {n:<18} rows={sum(1 for _ in open(os.path.join(OUT,n+'.csv')))-1:,}")
 # sanity
 qs=pd.concat(qsum)

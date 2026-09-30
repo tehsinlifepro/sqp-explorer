@@ -18,8 +18,12 @@ LOG="data_pipeline/refresh.log"
 echo "===== DB refresh $(date '+%Y-%m-%d %H:%M:%S') =====" | tee -a "$LOG"
 
 # 1. SQP (SellerLabs → masters → derived tables → Supabase). Needs Mac IP on the SellerLabs allowlist.
-echo "--- SQP ---" | tee -a "$LOG"
+echo "--- SQP (monthly) ---" | tee -a "$LOG"
 $PY data_pipeline/refresh_sqp.py 2>&1 | tee -a "$LOG"
+
+# 1b. SQP weekly (SellerLabs search_query_performance -> _week tables). Parallel to monthly; accumulator.
+echo "--- SQP (weekly) ---" | tee -a "$LOG"
+$PY data_pipeline/refresh_sqp_weekly.py 2>&1 | tee -a "$LOG"
 
 # 2. Ads (Azure → ad_searchterm + campaign_map; preserves manual_family).
 echo "--- Ads ---" | tee -a "$LOG"
