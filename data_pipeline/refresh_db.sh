@@ -33,4 +33,20 @@ $PY data_pipeline/build_campaign_map.py 2>&1 | tee -a "$LOG"
 echo "--- Retail analytics (TACOS denominator) ---" | tee -a "$LOG"
 $PY data_pipeline/refresh_ra.py 2>&1 | tee -a "$LOG"
 
+# 5. SP targeting (wasted-spend + harvest source). Accumulator.
+echo "--- Targeting (wasted-spend + harvest) ---" | tee -a "$LOG"
+$PY data_pipeline/refresh_targeting.py 2>&1 | tee -a "$LOG"
+
+# 6. SP placements (Top-of-Search / placement mix). Accumulator.
+echo "--- Placements (Top-of-Search) ---" | tee -a "$LOG"
+$PY data_pipeline/refresh_placements.py 2>&1 | tee -a "$LOG"
+
+# 7. SP advertised-product (ASIN-level / variation science). Accumulator.
+echo "--- Advertised product (ASIN-level) ---" | tee -a "$LOG"
+$PY data_pipeline/refresh_advertised.py 2>&1 | tee -a "$LOG"
+
+# 8. Sponsored Display (upper funnel). Accumulator.
+echo "--- Sponsored Display ---" | tee -a "$LOG"
+$PY data_pipeline/refresh_sd.py 2>&1 | tee -a "$LOG"
+
 echo "===== done $(date '+%H:%M:%S') =====" | tee -a "$LOG"

@@ -65,10 +65,14 @@ create or replace view v_query_latest with (security_invoker=on) as
 create or replace view v_rank_kw_enriched with (security_invoker=on) as
   select k.region, k.family, k.keyword, k.latest_rank, k.best_rank, k.avg_rank,
          k.days_tracked, k.days_ranked, k.ac_badge, k.trend,
-         m.clicks_l4w, q.latest_volume as sqp_volume
+         m.clicks_l4w, q.latest_volume as sqp_volume,
+         a.ad_spend, a.ad_orders
   from rank_family_keyword k
   left join kw_market m    on m.region=k.region and lower(m.keyword)=lower(k.keyword)
-  left join query_summary q on q.region=k.region and lower(q.search_query)=lower(k.keyword);
+  left join query_summary q on q.region=k.region and lower(q.search_query)=lower(k.keyword)
+  left join (select region, lower(customer_search_term) kw, round(sum(spend),2) ad_spend, sum(orders) ad_orders
+             from ad_searchterm group by region, lower(customer_search_term)) a
+         on a.region=k.region and a.kw=lower(k.keyword);
 
 create or replace view v_ad_term_enriched with (security_invoker=on) as
   select t.region, t.program, t.month, t.family, t.customer_search_term as keyword,

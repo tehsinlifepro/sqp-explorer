@@ -707,6 +707,9 @@ function AdsExplorer() {
 
   // deep-dive: keyword (search-term) level for the selected family
   const { rows: terms, loading: tl } = useRows('v_ad_term_enriched', family ? { region: 'CA', family } : { region: 'CA', family: '__none__' })
+  const { rows: plc } = useRows('v_placement_family_month', { region: 'CA' })
+  const { rows: adasin } = useRows('v_ad_asin_month', { region: 'CA' })
+  const { rows: sd } = useRows('v_sd_month', { region: 'CA' })
   const kf = useKwFilter()
   const kwAgg = useMemo(() => {
     const m = {}
@@ -728,6 +731,39 @@ function AdsExplorer() {
   }, [terms, prog, mr.from, mr.to, kf.contains, kf.sel]) // eslint-disable-line
   const allKw = useMemo(() => [...new Set(terms.map((r) => r.keyword))].sort(), [terms])
   const { sorted: kwSorted, sort: kwSort, toggle: kwToggle } = useSort(kwAgg, { col: 'spend', dir: 'desc' })
+
+  // placement mix (SP) for the selected family + range
+  const plcAgg = useMemo(() => {
+    const m = {}
+    plc.filter((r) => r.family === family && mr.inRange(r.month)).forEach((r) => {
+      const x = (m[r.placement_type] = m[r.placement_type] || { placement: r.placement_type, spend: 0, sales: 0, orders: 0 })
+      x.spend += r.spend || 0; x.sales += r.sales || 0; x.orders += r.orders || 0
+    })
+    const tot = Object.values(m).reduce((s, x) => s + x.spend, 0)
+    return Object.values(m).map((x) => ({ ...x, acos: x.sales ? x.spend / x.sales : null, share: tot ? x.spend / tot : null }))
+      .sort((a, b) => b.spend - a.spend)
+  }, [plc, family, mr.from, mr.to])
+
+  // variation science: advertised children ranked by ad CVR (+ halo) for the selected family
+  const childAgg = useMemo(() => {
+    const m = {}
+    adasin.filter((r) => r.family === family && mr.inRange(r.month)).forEach((r) => {
+      const x = (m[r.asin] = m[r.asin] || { asin: r.asin, model: r.model, spend: 0, clicks: 0, orders: 0, sales: 0, other: 0 })
+      x.spend += r.spend || 0; x.clicks += r.clicks || 0; x.orders += r.orders || 0; x.sales += r.sales || 0; x.other += r.other_sku_sales || 0
+    })
+    return Object.values(m).map((x) => ({ ...x, cvr: x.clicks ? x.orders / x.clicks : null, halo: x.sales ? x.other / x.sales : null }))
+      .sort((a, b) => (b.cvr || 0) - (a.cvr || 0))
+  }, [adasin, family, mr.from, mr.to])
+
+  // Sponsored Display (account-level upper funnel) over the selected range
+  const sdAgg = useMemo(() => {
+    const x = { spend: 0, sales: 0, orders: 0, ntb_sales: 0, dpv: 0, atc: 0 }
+    sd.filter((r) => mr.inRange(r.month)).forEach((r) => {
+      x.spend += r.spend || 0; x.sales += r.sales || 0; x.orders += r.orders || 0
+      x.ntb_sales += r.ntb_sales || 0; x.dpv += r.dpv || 0; x.atc += r.atc || 0
+    })
+    return { ...x, acos: x.sales ? x.spend / x.sales : null, ntb: x.sales ? x.ntb_sales / x.sales : null }
+  }, [sd, mr.from, mr.to])
 
   if (error) return <ErrorBanner msg={error} />
   return (
@@ -819,6 +855,49 @@ function AdsExplorer() {
             </tbody></table></div>)}
         <div className="muted small" style={{ marginTop: 8 }}>Spend / Sales / Orders = ad totals over the selected months. <b>ROAS</b> = sales ÷ spend; <b>CPC</b> = spend ÷ click; <b>Halo %</b> = share of ad sales from OTHER SKUs (total − advertised-SKU), so high halo means the term sells the catalog, not just the ad. <b>SQP vol</b>, <b>Clicks L4W</b> and <b>Impr / Click / Purch %</b> are the latest-month organic &amp; market signals for that term (“-” if not in SQP / Datarova). Click any column to sort. Showing up to 400.</div>
       </div>
+      {prog !== 'SB' && (<div className="card"><h3>Placement mix · {family} <span className="muted small">where spend goes &amp; which converts (Sponsored Products)</span></h3>
+        {!plcAgg.length ? <Empty msg="No placement data for this family in range." /> : (
+          <div className="table-scroll"><table>
+            <thead><tr><th>Placement</th><th className="num">Spend</th><th className="num">% of spend</th><th className="num">ACOS</th><th className="num">Orders</th></tr></thead>
+            <tbody>{plcAgg.map((r) => (
+              <tr key={r.placement}>
+                <td><b>{r.placement || '—'}</b></td>
+                <td className="num">{money(r.spend, 'CA')}</td>
+                <td className="num">{pct(r.share)}</td>
+                <td className="num"><span className={'badge ' + (r.acos > 0.25 ? 'down' : r.acos ? 'up' : 'flat')}>{r.acos ? (r.acos * 100).toFixed(0) + '%' : '—'}</span></td>
+                <td className="num muted">{num(r.orders)}</td>
+              </tr>))}
+            </tbody></table></div>)}
+        <div className="muted small" style={{ marginTop: 8 }}><b>Top of Search</b> usually costs more but buys ranking — a high Top-of-Search ACOS is the price of the ranking phase. <b>Off Amazon</b> converting poorly is the first thing to trim.</div>
+      </div>)}
+      {prog !== 'SB' && (<div className="card"><h3>Children by ad CVR · {family} <span className="muted small">which variation to advertise (Sponsored Products)</span></h3>
+        {!childAgg.length ? <Empty msg="No advertised-product data for this family in range." /> : (
+          <div className="table-scroll"><table>
+            <thead><tr><th>ASIN</th><th>Model</th><th className="num">Clicks</th><th className="num">Orders</th><th className="num">Ad CVR</th><th className="num">Spend</th><th className="num">Halo %</th></tr></thead>
+            <tbody>{childAgg.map((r, i) => (
+              <tr key={r.asin} style={(i === 0 && r.cvr != null) ? { background: 'var(--panel2)' } : undefined}>
+                <td className="small"><b>{r.asin}</b>{i === 0 && r.cvr != null && <span className="badge up" style={{ marginLeft: 6 }}>best CVR</span>}</td>
+                <td className="small muted">{r.model || '—'}</td>
+                <td className="num muted">{num(r.clicks)}</td>
+                <td className="num">{num(r.orders)}</td>
+                <td className="num">{r.cvr == null ? '—' : pct(r.cvr)}</td>
+                <td className="num">{money(r.spend, 'CA')}</td>
+                <td className="num">{r.halo == null ? '—' : pct(r.halo)}</td>
+              </tr>))}
+            </tbody></table></div>)}
+        <div className="muted small" style={{ marginTop: 8 }}>Advertise the <b>highest-CVR child</b> — ranking gains concentrate on it. <b>Halo %</b> = share of this ASIN's ad sales that landed on OTHER SKUs; a high-halo child pulls the whole family.</div>
+      </div>)}
+      <div className="card"><h3>Sponsored Display · account <span className="muted small">upper funnel — new-to-brand, DPV, ATC (selected months)</span></h3>
+        <div className="kpis">
+          <div className="kpi"><div className="v">{money(sdAgg.spend, 'CA')}</div><div className="l">SD spend</div></div>
+          <div className="kpi"><div className="v">{money(sdAgg.sales, 'CA')}</div><div className="l">SD sales</div></div>
+          <div className="kpi"><div className="v">{sdAgg.acos != null ? (sdAgg.acos * 100).toFixed(0) + '%' : '—'}</div><div className="l">ACOS</div></div>
+          <div className="kpi"><div className="v">{sdAgg.ntb != null ? pct(sdAgg.ntb) : '—'}</div><div className="l">New-to-brand %</div></div>
+          <div className="kpi"><div className="v">{num(sdAgg.dpv)}</div><div className="l">Detail-page views</div></div>
+          <div className="kpi"><div className="v">{num(sdAgg.atc)}</div><div className="l">Add-to-cart</div></div>
+        </div>
+        <div className="muted small" style={{ marginTop: 8 }}>Sponsored Display is the brand-building / retargeting lever; a high <b>new-to-brand %</b> means it's bringing NEW customers. LifePro runs it lightly — an upper-funnel opportunity.</div>
+      </div>
     </div>
   )
 }
@@ -907,6 +986,94 @@ function TacosExplorer() {
               </tr>))}
             </tbody></table></div>)}
         <div className="muted small" style={{ marginTop: 8 }}><b>Headroom</b> = (ceiling − TACOS) × sales — the extra ad budget a family can absorb over the selected months and still finish under the ceiling. Green TACOS = under ceiling (room to scale); red = over (rein in). Covers catalogued families (~96% of account sales). Margin isn't shown (retail COGS here is Amazon's cost, not LifePro's — use the Blended sheet).</div>
+      </div>
+    </div>
+  )
+}
+
+/* ---------------- Optimize (wasted spend + harvest) — Canada only ---------------- */
+const mtLabel = (m) => (m && m.startsWith('TARGETING_EXPRESSION') ? 'Auto' : m || '—')
+function OptimizeExplorer() {
+  const { rows: tgt, loading: tl, error: te } = useRows('v_targeting_enriched', { region: 'CA' })
+  const { rows: harvest, loading: hl, error: he } = useRows('v_ad_harvest', { region: 'CA' })
+  const months = useMemo(() => [...new Set(tgt.map((r) => r.month))].sort(), [tgt])
+  const mr = useMonthRange(months)
+  const wasted = useMemo(() => {
+    const m = {}
+    tgt.filter((r) => mr.inRange(r.month)).forEach((r) => {
+      // key by campaign + ad group + target + match so a converting sibling in another campaign can't hide real waste
+      const k = r.campaign_id + '||' + r.ad_group_id + '||' + r.targeting + '||' + r.match_type
+      const x = (m[k] = m[k] || { family: r.family, campaign: r.campaign_name, targeting: r.targeting, match_type: r.match_type, spend: 0, clicks: 0, orders: 0, bid: null })
+      x.spend += r.spend || 0; x.clicks += r.clicks || 0; x.orders += r.orders || 0; x.bid = maxN(x.bid, r.keyword_bid)
+    })
+    return Object.values(m).filter((x) => x.orders === 0 && x.spend > 0)
+  }, [tgt, mr.from, mr.to])
+  const wS = useSort(wasted, { col: 'spend', dir: 'desc' })
+  const totWasted = wasted.reduce((s, x) => s + x.spend, 0)
+  const harv = useMemo(() => harvest.map((h) => ({ ...h, acos: h.sales ? h.spend / h.sales : null })), [harvest])
+  const hS = useSort(harv, { col: 'sales', dir: 'desc' })
+  const totHarvSales = harv.reduce((s, x) => s + (x.sales || 0), 0)
+  const error = te || he
+  if (error) return <ErrorBanner msg={error} />
+  return (
+    <div>
+      <div className="controls">
+        <MonthRange r={mr} />
+        <span className="muted small" style={{ alignSelf: 'flex-end' }}>Canada · Sponsored Products</span>
+      </div>
+      <div className="kpis" style={{ marginBottom: 16 }}>
+        <div className="kpi"><div className="v">{tl ? '…' : money(totWasted, 'CA')}</div><div className="l">Wasted spend (range)</div></div>
+        <div className="kpi"><div className="v">{tl ? '…' : num(wasted.length)}</div><div className="l">Zero-order targets</div></div>
+        <div className="kpi"><div className="v">{hl ? '…' : num(harv.length)}</div><div className="l">Harvest candidates</div></div>
+        <div className="kpi"><div className="v">{hl ? '…' : money(totHarvSales, 'CA')}</div><div className="l">Harvest sales (all-time)</div></div>
+      </div>
+      <div className="card"><h3>Wasted spend — targets with spend &amp; zero orders <span className="muted small">({wS.sorted.length}) · selected months</span></h3>
+        {tl ? <SkelRows n={10} /> : !wS.sorted.length ? <Empty msg="No zero-order spend in range — clean." /> : (
+          <div className="table-scroll"><table>
+            <thead><tr>
+              <Th col="family" sort={wS.sort} toggle={wS.toggle}>Family</Th>
+              <Th col="campaign" sort={wS.sort} toggle={wS.toggle}>Campaign</Th>
+              <Th col="targeting" sort={wS.sort} toggle={wS.toggle}>Target</Th>
+              <Th col="match_type" sort={wS.sort} toggle={wS.toggle}>Match</Th>
+              <Th col="spend" sort={wS.sort} toggle={wS.toggle} num>Spend</Th>
+              <Th col="clicks" sort={wS.sort} toggle={wS.toggle} num>Clicks</Th>
+              <Th col="bid" sort={wS.sort} toggle={wS.toggle} num>Bid</Th>
+            </tr></thead>
+            <tbody>{wS.sorted.slice(0, 400).map((r, i) => (
+              <tr key={i}>
+                <td className="small">{r.family || <span className="muted">—</span>}</td>
+                <td className="small muted" style={{ maxWidth: 220 }}>{r.campaign || '—'}</td>
+                <td><b>{r.targeting}</b></td>
+                <td className="small muted">{mtLabel(r.match_type)}</td>
+                <td className="num"><span className="badge down">{money(r.spend, 'CA')}</span></td>
+                <td className="num muted">{num(r.clicks)}</td>
+                <td className="num muted">{r.bid == null ? '—' : money(r.bid, 'CA')}</td>
+              </tr>))}
+            </tbody></table></div>)}
+        <div className="muted small" style={{ marginTop: 8 }}>Spend with <b>0 orders</b> over the selected months — negate the search term or drop the target. “Auto” = auto/predefined targeting. Showing up to 400.</div>
+      </div>
+      <div className="card"><h3>Harvest — converting terms not yet exact <span className="muted small">({hS.sorted.length})</span></h3>
+        {hl ? <SkelRows n={10} /> : !hS.sorted.length ? <Empty /> : (
+          <div className="table-scroll"><table>
+            <thead><tr>
+              <Th col="term" sort={hS.sort} toggle={hS.toggle}>Search term</Th>
+              <Th col="family" sort={hS.sort} toggle={hS.toggle}>Family</Th>
+              <Th col="orders" sort={hS.sort} toggle={hS.toggle} num>Orders</Th>
+              <Th col="sales" sort={hS.sort} toggle={hS.toggle} num>Sales</Th>
+              <Th col="spend" sort={hS.sort} toggle={hS.toggle} num>Spend</Th>
+              <Th col="acos" sort={hS.sort} toggle={hS.toggle} num>ACOS</Th>
+            </tr></thead>
+            <tbody>{hS.sorted.slice(0, 400).map((r, i) => (
+              <tr key={i}>
+                <td><b>{r.term}</b></td>
+                <td className="small muted">{r.family}</td>
+                <td className="num">{num(r.orders)}</td>
+                <td className="num">{money(r.sales, 'CA')}</td>
+                <td className="num muted">{money(r.spend, 'CA')}</td>
+                <td className="num"><span className={'badge ' + (r.acos > 0.25 ? 'down' : r.acos ? 'up' : 'flat')}>{r.acos ? (r.acos * 100).toFixed(0) + '%' : '—'}</span></td>
+              </tr>))}
+            </tbody></table></div>)}
+        <div className="muted small" style={{ marginTop: 8 }}>SP search terms that <b>convert</b> (≥1 order, all-time) but aren’t yet an <b>exact</b> target — promote to an exact campaign / Top-of-Search. Brand terms and ASIN targets (e.g. “b0…”) appear here too; sort/scan by family. Showing up to 400.</div>
       </div>
     </div>
   )
@@ -1061,6 +1228,8 @@ function OrganicRanks({ region }) {
               <Th col="avg_rank" sort={sort} toggle={toggle} num>Avg</Th>
               <Th col="sqp_volume" sort={sort} toggle={toggle} num>SQP vol/mo</Th>
               <Th col="clicks_l4w" sort={sort} toggle={toggle} num>Clicks L4W</Th>
+              <Th col="ad_spend" sort={sort} toggle={toggle} num>Ad $ (all-time)</Th>
+              <th>Recover</th>
               <Th col="days_ranked" sort={sort} toggle={toggle} num>Ranked days</Th>
               <Th col="ac_badge" sort={sort} toggle={toggle}>AC</Th>
               <Th col="trend" sort={sort} toggle={toggle}>Trend</Th>
@@ -1073,12 +1242,15 @@ function OrganicRanks({ region }) {
                 <td className="num muted">{r.avg_rank == null ? '—' : r.avg_rank}</td>
                 <td className="num">{r.sqp_volume == null ? '-' : num(r.sqp_volume)}</td>
                 <td className="num">{r.clicks_l4w == null ? '-' : num(r.clicks_l4w)}</td>
+                <td className="num">{r.ad_spend == null ? '-' : money(r.ad_spend, region)}</td>
+                <td>{(r.latest_rank != null && r.latest_rank <= 10 && r.ad_spend > 0)
+                  ? <span className="badge up" title="ranked top-10 organically but still paying — candidate to reduce ad spend and let organic carry">pull back?</span> : ''}</td>
                 <td className="num muted">{r.days_ranked}/{r.days_tracked}</td>
                 <td>{r.ac_badge ? <span className="badge up">AC</span> : ''}</td>
                 <td><span className={rankBadge(r.trend)}>{r.trend}</span></td>
               </tr>))}
             </tbody></table></div>)}
-        <div className="muted small" style={{ marginTop: 8 }}>“Now” = latest organic position (lower is better); blank = not ranked. <b>SQP vol/mo</b> = latest-month search volume (“-” if not in SQP). <b>Clicks L4W</b> = market keyword clicks last 4 weeks (Datarova). Click any column header to sort. Showing up to 400.</div>
+        <div className="muted small" style={{ marginTop: 8 }}>“Now” = latest organic position (lower is better); blank = not ranked. <b>SQP vol/mo</b> = latest-month search volume (“-” if not in SQP). <b>Clicks L4W</b> = market keyword clicks last 4 weeks (Datarova). <b>Ad $</b> = ad spend on this term (all-time in the ad window, CA); <b>Recover</b> flags terms ranked top-10 organically that still take ad spend — pull back and let organic carry. Click any column header to sort. Showing up to 400.</div>
       </div>
     </div>
   )
@@ -1199,7 +1371,7 @@ export default function App() {
   }, [authed])
   if (!ready) return <div className="app"><SkelRows n={4} /></div>
   if (!authed) return <Login onIn={() => setAuthed(true)} />
-  const TABS = [['dash', 'Dashboard'], ['keyword', 'Keyword Explorer'], ['family', 'Family Explorer'], ['ranks', 'Organic Ranks'], ['ads', 'Ads'], ['tacos', 'TACOS'], ['map', 'Campaign Map'], ['cats', 'Categories'], ['asin', 'ASIN Explorer'], ['catalog', 'Catalog'], ['dl', 'Downloads']]
+  const TABS = [['dash', 'Dashboard'], ['keyword', 'Keyword Explorer'], ['family', 'Family Explorer'], ['ranks', 'Organic Ranks'], ['ads', 'Ads'], ['tacos', 'TACOS'], ['opt', 'Optimize'], ['map', 'Campaign Map'], ['cats', 'Categories'], ['asin', 'ASIN Explorer'], ['catalog', 'Catalog'], ['dl', 'Downloads']]
   const SI = (d) => <svg viewBox="0 0 24 24"><path d={d} /></svg>
   const ICONS = {
     dash: <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg>,
@@ -1208,6 +1380,7 @@ export default function App() {
     ranks: SI('M4 20V8m5 12v-7m5 7V4m5 16v-9'),
     ads: SI('M3 12h4l3 8 4-16 3 8h4'),
     tacos: <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="3.5" /><path d="M12 3v3M12 18v3M3 12h3M18 12h3" /></svg>,
+    opt: SI('M3 6h18M7 12h10M10 18h4'),
     map: SI('M9 3l6 3 6-3v15l-6 3-6-3-6 3V6zM9 3v15M15 6v15'),
     cats: <svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2" /><path d="M4 10h16" /></svg>,
     asin: SI('M20 7l-8-4-8 4 8 4 8-4zM4 7v10l8 4 8-4V7M12 11v10'),
@@ -1240,6 +1413,7 @@ export default function App() {
         {tab === 'ranks' && <OrganicRanks region={region} />}
         {tab === 'ads' && <AdsExplorer />}
         {tab === 'tacos' && <TacosExplorer />}
+        {tab === 'opt' && <OptimizeExplorer />}
         {tab === 'map' && <CampaignMapping />}
         {tab === 'cats' && <Categories region={region} />}
         {tab === 'asin' && <AsinExplorer region={region} />}
