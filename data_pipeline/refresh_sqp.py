@@ -73,9 +73,26 @@ for script in ("build_supabase_tables.py", "build_keyword_tables.py", "build_fam
         sys.exit(f"{script} FAILED:\n{r.stdout[-1500:]}\n{r.stderr[-1500:]}")
 
 # ── 5. load derived CSVs into Supabase (skip catalog) ─────────────────────────
+# The sb connection opened at the top sat idle through the builders (~2 min); Supabase
+# (esp. via the pooler) drops idle connections (SSL SYSCALL EOF), so reconnect first.
+try: sb.close()
+except Exception: pass
+sb = sb_connect(); sc = sb.cursor()
 DE = os.path.expanduser("~/Downloads/sqp-explorer/data_export")
+# Month-keyed tables are ACCUMULATED (upsert, never truncate): SellerLabs is a rolling
+# window that ages out old months, so a full rebuild would silently drop history. Upserting
+# on the PK preserves past months and adds/updates the current ones. Summary tables (rolling
+# snapshots) are still truncate+replace.
+ACCUMULATE = {
+    "category_month":     ["region", "category", "month"],
+    "asin_month":         ["region", "asin", "month"],
+    "query_month":        ["region", "search_query", "month"],
+    "query_asin_month":   ["region", "search_query", "asin", "month"],
+    "family_niche_month": ["region", "family", "month"],
+}
 for t in DERIVED:
-    n = load_csv(sc, t, os.path.join(DE, f"{t}.csv")); sb.commit()
-    print(f"  loaded {t}: {n:,} rows")
+    conflict = ACCUMULATE.get(t)
+    n = load_csv(sc, t, os.path.join(DE, f"{t}.csv"), truncate=(conflict is None), conflict=conflict); sb.commit()
+    print(f"  {'upserted' if conflict else 'loaded'} {t}: {n:,} rows")
 sb.close()
 print("✓ refresh_sqp complete (catalog left untouched — it is user-managed in the Catalog tab)")

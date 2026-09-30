@@ -16,16 +16,29 @@ def connect():
         user=os.environ['PGUSER'], password=os.environ['PGPASSWORD'],
         dbname=os.environ.get('PGDATABASE', 'postgres'), sslmode='require', connect_timeout=40)
 
-def load_csv(cur, table, csv_path, truncate=True):
+def load_csv(cur, table, csv_path, truncate=True, conflict=None):
+    """Load a CSV into `table`.
+    - default: truncate then insert (snapshot replace).
+    - conflict=[pk cols]: UPSERT (insert ... on conflict do update) and DO NOT truncate,
+      so rows/months not present in this batch are preserved. Use for month-keyed tables
+      fed by a rolling-window source (SellerLabs), turning the load into an accumulator.
+    """
     with open(csv_path, newline='') as f:
         r = csv.reader(f)
         cols = next(r)
         rows = [[(v if v != '' else None) for v in row] for row in r]
-    if truncate:
-        cur.execute(f'truncate {table}')
-    if rows:
-        collist = ','.join(f'"{c}"' for c in cols)
-        execute_values(cur, f'insert into {table} ({collist}) values %s', rows, page_size=5000)
+    collist = ','.join(f'"{c}"' for c in cols)
+    if conflict:
+        upd = ','.join(f'"{c}"=excluded."{c}"' for c in cols if c not in conflict)
+        action = f'do update set {upd}' if upd else 'do nothing'
+        sql = f'insert into {table} ({collist}) values %s on conflict ({",".join(conflict)}) {action}'
+        if rows:
+            execute_values(cur, sql, rows, page_size=5000)
+    else:
+        if truncate:
+            cur.execute(f'truncate {table}')
+        if rows:
+            execute_values(cur, f'insert into {table} ({collist}) values %s', rows, page_size=5000)
     return len(rows)
 
 if __name__ == '__main__':

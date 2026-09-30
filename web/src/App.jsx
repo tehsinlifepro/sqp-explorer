@@ -1073,7 +1073,7 @@ function CatalogTab() {
 /* ---------------- App shell ---------------- */
 export default function App() {
   const [authed, setAuthed] = useState(false); const [ready, setReady] = useState(false)
-  const [tab, setTab] = useState('dash'); const [region, setRegion] = useState('US')
+  const [tab, setTab] = useState('dash'); const [region, setRegion] = useState('CA')
   const [dataRange, setDataRange] = useState('')
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => { setAuthed(!!data.session); setReady(true) })
