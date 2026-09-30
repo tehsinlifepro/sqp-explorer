@@ -906,7 +906,8 @@ function AdsExplorer() {
 const daysInMonth = (mm) => { if (!mm) return 30; const [y, mo] = String(mm).split('-').map(Number); return new Date(y, mo, 0).getDate() }
 function TacosExplorer() {
   const { rows, loading, error } = useRows('v_tacos_family_month', { region: 'CA' })
-  const [ceiling, setCeiling] = useState(22)                 // % — course default; editable
+  const { rows: tgtRows } = useRows('targets', { region: 'CA' })
+  const [ceiling, setCeiling] = useState(22)                 // % — course default; overridden by an Account TACOS target if one is set
   const cf = (Number(ceiling) || 0) / 100
   const CUR_YM = new Date().toISOString().slice(0, 7)        // current calendar month 'YYYY-MM'
   // "Closed" months = strictly before the current calendar month AND with retail sales loaded. Keyed off the
@@ -936,6 +937,32 @@ function TacosExplorer() {
         headroom: tacos == null ? null : Math.max(0, (cf - tacos)) * x.sales } })
   }, [inr, cf])
   const fs = useSort(famTable, { col: 'sales', dir: 'desc' })
+
+  // ── targets (Sprint 9) ──────────────────────────────────────────────────────
+  // default the ceiling to the Account TACOS target when one is set (latest)
+  useEffect(() => {
+    const acct = [...tgtRows].filter((r) => r.scope === 'Account' && r.tacos_target != null).sort((a, b) => a.month.localeCompare(b.month)).pop()
+    if (acct) setCeiling(Math.round(acct.tacos_target * 1000) / 10)
+  }, [tgtRows.length]) // eslint-disable-line
+  const tgtByScope = useMemo(() => {
+    const m = {}
+    tgtRows.filter((r) => mr.inRange(r.month)).forEach((r) => {
+      const x = (m[r.scope] = m[r.scope] || { scope: r.scope, sales_target: 0, ppc_budget: 0, tacos_target: null, _tm: '' })
+      x.sales_target += r.sales_target || 0; x.ppc_budget += r.ppc_budget || 0
+      if (r.tacos_target != null && r.month >= x._tm) { x.tacos_target = r.tacos_target; x._tm = r.month }
+    })
+    return m
+  }, [tgtRows, mr.from, mr.to])
+  const act = useMemo(() => {
+    const m = {}; let s = 0, sp = 0
+    inr.forEach((r) => { const x = (m[r.family] = m[r.family] || { sales: 0, spend: 0 }); x.sales += r.ordered_rev || 0; x.spend += r.ad_spend || 0; s += r.ordered_rev || 0; sp += r.ad_spend || 0 })
+    return { byFam: m, account: { sales: s, spend: sp } }
+  }, [inr])
+  const vsTarget = useMemo(() => Object.keys(tgtByScope).map((s) => {
+    const t = tgtByScope[s]; const a = s === 'Account' ? act.account : (act.byFam[s] || { sales: 0, spend: 0 })
+    return { scope: s, salesAct: a.sales, salesTgt: t.sales_target, ppcAct: a.spend, ppcTgt: t.ppc_budget, tacos: a.sales ? a.spend / a.sales : null, tacosTgt: t.tacos_target }
+  }).sort((a, b) => b.salesAct - a.salesAct), [tgtByScope, act])
+
   if (error) return <ErrorBanner msg={error} />
   return (
     <div>
@@ -987,6 +1014,25 @@ function TacosExplorer() {
             </tbody></table></div>)}
         <div className="muted small" style={{ marginTop: 8 }}><b>Headroom</b> = (ceiling − TACOS) × sales — the extra ad budget a family can absorb over the selected months and still finish under the ceiling. Green TACOS = under ceiling (room to scale); red = over (rein in). Covers catalogued families (~96% of account sales). Margin isn't shown (retail COGS here is Amazon's cost, not LifePro's — use the Blended sheet).</div>
       </div>
+      {vsTarget.length > 0 && (<div className="card"><h3>Actuals vs targets <span className="muted small">· selected months · set in the Targets tab</span></h3>
+        <div className="table-scroll"><table>
+          <thead><tr><th>Scope</th><th className="num">Sales</th><th className="num">Target</th><th className="num">%</th><th className="num">PPC spend</th><th className="num">Budget</th><th className="num">Used</th><th className="num">TACOS</th><th className="num">Target</th></tr></thead>
+          <tbody>{vsTarget.map((r) => {
+            const sPct = r.salesTgt ? r.salesAct / r.salesTgt : null, bPct = r.ppcTgt ? r.ppcAct / r.ppcTgt : null
+            return (<tr key={r.scope}>
+              <td><b>{r.scope}</b></td>
+              <td className="num">{money(r.salesAct, 'CA')}</td>
+              <td className="num muted">{r.salesTgt ? money(r.salesTgt, 'CA') : '—'}</td>
+              <td className="num"><span className={'badge ' + (sPct == null ? 'flat' : sPct >= 1 ? 'up' : sPct >= 0.9 ? 'flat' : 'down')}>{sPct == null ? '—' : pct(sPct)}</span></td>
+              <td className="num">{money(r.ppcAct, 'CA')}</td>
+              <td className="num muted">{r.ppcTgt ? money(r.ppcTgt, 'CA') : '—'}</td>
+              <td className="num"><span className={'badge ' + (bPct == null ? 'flat' : bPct <= 1 ? 'up' : 'down')}>{bPct == null ? '—' : pct(bPct)}</span></td>
+              <td className="num">{r.tacos == null ? '—' : pct(r.tacos)}</td>
+              <td className="num"><span className={'badge ' + ((r.tacosTgt == null || r.tacos == null) ? 'flat' : r.tacos <= r.tacosTgt ? 'up' : 'down')}>{r.tacosTgt == null ? '—' : pct(r.tacosTgt)}</span></td>
+            </tr>)
+          })}</tbody></table></div>
+        <div className="muted small" style={{ marginTop: 8 }}>Sales % ≥100 = on/above target (green); PPC Used ≤100 = within budget; TACOS ≤ target = green. Targets summed over the selected months; TACOS target is the latest month's.</div>
+      </div>)}
     </div>
   )
 }
@@ -1244,6 +1290,83 @@ function RecommendationsExplorer() {
               </tr>))}
             </tbody></table></div>)}
         <div className="muted small" style={{ marginTop: 8 }}>Every recommendation is derived from your own data (rule-based — no AI guessing), each reason benchmarked against your account ACoS. <b>C$ at stake</b> = spend saved (Cut/Recover), over-benchmark spend or absorbable headroom (Bid), sales in play (Harvest), headroom to deploy (Reinvest), est. savings (Placement), or reallocatable spend (Variation). <b>Harvest &amp; Recover use lifetime data</b>; the month range drives the other types. Canada · Sponsored Products. Showing up to 500.</div>
+      </div>
+    </div>
+  )
+}
+
+/* ---------------- Targets (editable: monthly sales target, PPC budget, TACOS target) — Canada ---------------- */
+function TargetsTab() {
+  const [rows, setRows] = useState([]); const [loading, setLoading] = useState(true); const [err, setErr] = useState(null)
+  const [fams, setFams] = useState(['Account']); const [saved, setSaved] = useState('')
+  const monthNow = new Date().toISOString().slice(0, 7)
+  const blank = { region: 'CA', scope: 'Account', month: monthNow, sales_target: '', ppc_budget: '', tacos_target: '' }
+  const [adding, setAdding] = useState(blank)
+  const load = () => { setLoading(true); fetchAll('targets').then((d) => { setRows(d); setLoading(false) }).catch((e) => { setErr(e.message); setLoading(false) }) }
+  useEffect(load, [])
+  useEffect(() => { fetchAll('catalog', { region: 'CA' }).then((d) => setFams(['Account', ...[...new Set(d.map((r) => r.family).filter(Boolean))].sort()])).catch(() => {}) }, [])
+  const { sorted, sort, toggle } = useSort(rows, { col: 'month', dir: 'desc' })
+  const flash = (id) => { setSaved(id); setTimeout(() => setSaved(''), 1400) }
+  const saveCell = async (row, field, raw) => {
+    let value = raw.trim() === '' ? null : Number(raw); if (value != null && field === 'tacos_target') value = value / 100
+    const { error } = await supabase.from('targets').update({ [field]: value }).eq('region', row.region).eq('scope', row.scope).eq('month', row.month)
+    if (error) { setErr(error.message); if (isAuthErr(error)) supabase.auth.signOut(); return }
+    setRows((rs) => rs.map((r) => (r.region === row.region && r.scope === row.scope && r.month === row.month ? { ...r, [field]: value } : r))); flash(row.region + row.scope + row.month)
+  }
+  const addRow = async () => {
+    const a = adding; if (!/^\d{4}-\d{2}$/.test(a.month)) { setErr('Month must be YYYY-MM.'); return }
+    if (rows.find((r) => r.region === a.region && r.scope === a.scope && r.month === a.month)) { setErr(`${a.scope} · ${a.month} already exists.`); return }
+    const rec = { region: a.region, scope: a.scope, month: a.month,
+      sales_target: a.sales_target === '' ? null : Number(a.sales_target), ppc_budget: a.ppc_budget === '' ? null : Number(a.ppc_budget),
+      tacos_target: a.tacos_target === '' ? null : Number(a.tacos_target) / 100 }
+    const { error } = await supabase.from('targets').insert(rec)
+    if (error) { setErr(error.message); if (isAuthErr(error)) supabase.auth.signOut(); return }
+    setErr(null); setRows((rs) => [...rs, rec]); setAdding({ ...blank, scope: a.scope, month: a.month }); flash('added')
+  }
+  const delRow = async (row) => {
+    if (!window.confirm(`Remove target for ${row.scope} · ${row.month}?`)) return
+    const { error } = await supabase.from('targets').delete().eq('region', row.region).eq('scope', row.scope).eq('month', row.month)
+    if (error) { setErr(error.message); return }
+    setRows((rs) => rs.filter((r) => !(r.region === row.region && r.scope === row.scope && r.month === row.month)))
+  }
+  return (
+    <div>
+      <datalist id="tg-scopes">{fams.map((f) => <option key={f} value={f} />)}</datalist>
+      <div className="card">
+        <h3>Add a target {saved === 'added' && <span className="badge up">added ✓</span>}</h3>
+        <div className="controls" style={{ alignItems: 'flex-end', marginBottom: 0 }}>
+          <div className="field"><label>Scope</label><input list="tg-scopes" value={adding.scope} onChange={(e) => setAdding({ ...adding, scope: e.target.value })} placeholder="Account or family" /></div>
+          <div className="field"><label>Month</label><input value={adding.month} onChange={(e) => setAdding({ ...adding, month: e.target.value })} placeholder="YYYY-MM" style={{ width: 110 }} /></div>
+          <div className="field"><label>Sales target (C$)</label><input type="number" value={adding.sales_target} onChange={(e) => setAdding({ ...adding, sales_target: e.target.value })} style={{ width: 130 }} /></div>
+          <div className="field"><label>PPC budget (C$)</label><input type="number" value={adding.ppc_budget} onChange={(e) => setAdding({ ...adding, ppc_budget: e.target.value })} style={{ width: 130 }} /></div>
+          <div className="field"><label>TACOS target %</label><input type="number" value={adding.tacos_target} onChange={(e) => setAdding({ ...adding, tacos_target: e.target.value })} style={{ width: 110 }} /></div>
+          <button className="primary" onClick={addRow}>Add target</button>
+        </div>
+      </div>
+      <div className="card">
+        <h3>Targets <span className="muted small">({sorted.length})</span> {saved && saved !== 'added' && <span className="badge up">saved ✓</span>}</h3>
+        {err && <ErrorBanner msg={err} onRetry={load} />}
+        {loading ? <SkelRows n={8} /> : !sorted.length ? <Empty msg="No targets yet — add one above." /> : (
+          <div className="table-scroll"><table>
+            <thead><tr>
+              <Th col="scope" sort={sort} toggle={toggle}>Scope</Th>
+              <Th col="month" sort={sort} toggle={toggle}>Month</Th>
+              <Th col="sales_target" sort={sort} toggle={toggle} num>Sales target</Th>
+              <Th col="ppc_budget" sort={sort} toggle={toggle} num>PPC budget</Th>
+              <Th col="tacos_target" sort={sort} toggle={toggle} num>TACOS target</Th>
+              <th aria-label="remove" />
+            </tr></thead>
+            <tbody>{sorted.map((r) => (
+              <tr key={r.region + r.scope + r.month}>
+                <td><b>{r.scope}</b></td>
+                <td className="small muted">{fmtMonth(r.month)}</td>
+                <td><input className="cell-input" type="number" defaultValue={r.sales_target ?? ''} onBlur={(e) => saveCell(r, 'sales_target', e.target.value)} style={{ width: 120 }} /></td>
+                <td><input className="cell-input" type="number" defaultValue={r.ppc_budget ?? ''} onBlur={(e) => saveCell(r, 'ppc_budget', e.target.value)} style={{ width: 120 }} /></td>
+                <td><input className="cell-input" type="number" defaultValue={r.tacos_target != null ? (Math.round(r.tacos_target * 1000) / 10) : ''} onBlur={(e) => saveCell(r, 'tacos_target', e.target.value)} style={{ width: 90 }} />%</td>
+                <td><button className="ghost small" title="remove" onClick={() => delRow(r)}>✕</button></td>
+              </tr>))}
+            </tbody></table></div>)}
+        <div className="muted small" style={{ marginTop: 10 }}>Set a <b>Scope</b> = “Account” or a family name, a <b>Month</b> (YYYY-MM), and any of sales target / PPC budget / TACOS target. The TACOS tab compares actuals to these. Edits save when you leave a cell.</div>
       </div>
     </div>
   )
@@ -1541,7 +1664,7 @@ export default function App() {
   }, [authed])
   if (!ready) return <div className="app"><SkelRows n={4} /></div>
   if (!authed) return <Login onIn={() => setAuthed(true)} />
-  const TABS = [['dash', 'Dashboard'], ['keyword', 'Keyword Explorer'], ['family', 'Family Explorer'], ['ranks', 'Organic Ranks'], ['ads', 'Ads'], ['tacos', 'TACOS'], ['opt', 'Optimize'], ['rec', 'Recommendations'], ['map', 'Campaign Map'], ['cats', 'Categories'], ['asin', 'ASIN Explorer'], ['catalog', 'Catalog'], ['dl', 'Downloads']]
+  const TABS = [['dash', 'Dashboard'], ['keyword', 'Keyword Explorer'], ['family', 'Family Explorer'], ['ranks', 'Organic Ranks'], ['ads', 'Ads'], ['tacos', 'TACOS'], ['opt', 'Optimize'], ['rec', 'Recommendations'], ['map', 'Campaign Map'], ['cats', 'Categories'], ['asin', 'ASIN Explorer'], ['catalog', 'Catalog'], ['tgts', 'Targets'], ['dl', 'Downloads']]
   const SI = (d) => <svg viewBox="0 0 24 24"><path d={d} /></svg>
   const ICONS = {
     dash: <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg>,
@@ -1552,6 +1675,7 @@ export default function App() {
     tacos: <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="3.5" /><path d="M12 3v3M12 18v3M3 12h3M18 12h3" /></svg>,
     opt: SI('M3 6h18M7 12h10M10 18h4'),
     rec: SI('M9 18h6M10 22h4M12 2a7 7 0 00-4 12c.5.5 1 1.5 1 3h6c0-1.5.5-2.5 1-3a7 7 0 00-4-12z'),
+    tgts: SI('M4 21V4h11l-1.6 3.5L15 11H6v10z'),
     map: SI('M9 3l6 3 6-3v15l-6 3-6-3-6 3V6zM9 3v15M15 6v15'),
     cats: <svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2" /><path d="M4 10h16" /></svg>,
     asin: SI('M20 7l-8-4-8 4 8 4 8-4zM4 7v10l8 4 8-4V7M12 11v10'),
@@ -1590,6 +1714,7 @@ export default function App() {
         {tab === 'cats' && <Categories region={region} />}
         {tab === 'asin' && <AsinExplorer region={region} />}
         {tab === 'catalog' && <CatalogTab />}
+        {tab === 'tgts' && <TargetsTab />}
         {tab === 'dl' && <Downloads region={region} />}
         <div className="muted small" style={{ marginTop: 20 }}>
           Data: Amazon Brand Analytics SQP · {dataRange || '…'} · search-attributed purchases (not total units; excludes 1P/Vendor).
