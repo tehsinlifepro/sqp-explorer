@@ -699,8 +699,8 @@ function AdsExplorer() {
   }, [scope])
   const famTable = useMemo(() => {
     const m = {}
-    fr.forEach((r) => { if (!r.family) return; const x = (m[r.family] = m[r.family] || { family: r.family, spend: 0, sales: 0, clicks: 0, orders: 0 }); x.spend += r.spend || 0; x.sales += r.sales || 0; x.clicks += r.clicks || 0; x.orders += r.orders || 0 })
-    return Object.values(m).map((x) => ({ ...x, acos: x.sales ? x.spend / x.sales : null }))
+    fr.forEach((r) => { if (!r.family) return; const x = (m[r.family] = m[r.family] || { family: r.family, spend: 0, sales: 0, clicks: 0, orders: 0, adv_sku_sales: 0 }); x.spend += r.spend || 0; x.sales += r.sales || 0; x.clicks += r.clicks || 0; x.orders += r.orders || 0; x.adv_sku_sales += r.adv_sku_sales || 0 })
+    return Object.values(m).map((x) => ({ ...x, acos: x.sales ? x.spend / x.sales : null, roas: x.spend ? x.sales / x.spend : null, halo: x.sales ? (x.sales - x.adv_sku_sales) / x.sales : null }))
   }, [fr])
   const famS = useSort(famTable, { col: 'spend', dir: 'desc' })
   const tot = scope.reduce((s, r) => ({ spend: s.spend + (r.spend || 0), sales: s.sales + (r.sales || 0), orders: s.orders + (r.orders || 0) }), { spend: 0, sales: 0, orders: 0 })
@@ -711,12 +711,20 @@ function AdsExplorer() {
   const kwAgg = useMemo(() => {
     const m = {}
     terms.filter((r) => (prog === 'All' || r.program === prog) && mr.inRange(r.month) && kf.pred(r.keyword)).forEach((r) => {
-      const x = (m[r.keyword] = m[r.keyword] || { keyword: r.keyword, spend: 0, sales: 0, ad_clicks: 0, orders: 0, sqp_volume: null, clicks_l4w: null, impr_share: null, click_share: null, purch_share: null })
-      x.spend += r.spend || 0; x.sales += r.sales || 0; x.ad_clicks += r.clicks || 0; x.orders += r.orders || 0
+      const x = (m[r.keyword] = m[r.keyword] || { keyword: r.keyword, spend: 0, sales: 0, ad_impr: 0, ad_clicks: 0, orders: 0, units: 0, adv_sku_sales: 0, tos_share: null, sqp_volume: null, clicks_l4w: null, impr_share: null, click_share: null, purch_share: null })
+      x.spend += r.spend || 0; x.sales += r.sales || 0; x.ad_impr += r.impressions || 0; x.ad_clicks += r.clicks || 0; x.orders += r.orders || 0
+      // tos_share (SB Top-of-Search impression share) is EMPTY at source in Reason — kept but intentionally NOT rendered;
+      // real Top-of-Search comes from the SP placement report (Sprint 4). units/ctr are staged for upcoming views.
+      x.units += r.units || 0; x.adv_sku_sales += r.adv_sku_sales || 0; x.tos_share = maxN(x.tos_share, r.tos_impr_share)
       x.sqp_volume = maxN(x.sqp_volume, r.sqp_volume); x.clicks_l4w = maxN(x.clicks_l4w, r.clicks_l4w)
       x.impr_share = maxN(x.impr_share, r.our_impr_share); x.click_share = maxN(x.click_share, r.our_click_share); x.purch_share = maxN(x.purch_share, r.our_purchase_share)
     })
-    return Object.values(m).map((x) => ({ ...x, acos: x.sales ? x.spend / x.sales : null }))
+    return Object.values(m).map((x) => ({ ...x,
+      acos: x.sales ? x.spend / x.sales : null,
+      roas: x.spend ? x.sales / x.spend : null,
+      cpc: x.ad_clicks ? x.spend / x.ad_clicks : null,
+      ctr: x.ad_impr ? x.ad_clicks / x.ad_impr : null,
+      halo: x.sales ? (x.sales - x.adv_sku_sales) / x.sales : null }))
   }, [terms, prog, mr.from, mr.to, kf.contains, kf.sel]) // eslint-disable-line
   const allKw = useMemo(() => [...new Set(terms.map((r) => r.keyword))].sort(), [terms])
   const { sorted: kwSorted, sort: kwSort, toggle: kwToggle } = useSort(kwAgg, { col: 'spend', dir: 'desc' })
@@ -738,6 +746,7 @@ function AdsExplorer() {
         <div className="kpi"><div className="v">{loading ? '…' : money(tot.spend, 'CA')}</div><div className="l">Ad spend · {family}</div></div>
         <div className="kpi"><div className="v">{loading ? '…' : money(tot.sales, 'CA')}</div><div className="l">Ad sales</div></div>
         <div className="kpi"><div className="v">{loading ? '…' : (tot.sales ? (tot.spend / tot.sales * 100).toFixed(0) + '%' : '—')}</div><div className="l">ACOS</div></div>
+        <div className="kpi"><div className="v">{loading ? '…' : (tot.spend ? (tot.sales / tot.spend).toFixed(1) + 'x' : '—')}</div><div className="l">ROAS</div></div>
         <div className="kpi"><div className="v">{loading ? '…' : num(tot.orders)}</div><div className="l">Ad orders</div></div>
       </div>
       <div className="card"><h3>Spend &amp; ACOS over time · {family}</h3>
@@ -758,6 +767,8 @@ function AdsExplorer() {
               <Th col="spend" sort={famS.sort} toggle={famS.toggle} num>Spend</Th>
               <Th col="sales" sort={famS.sort} toggle={famS.toggle} num>Sales</Th>
               <Th col="acos" sort={famS.sort} toggle={famS.toggle} num>ACOS</Th>
+              <Th col="roas" sort={famS.sort} toggle={famS.toggle} num>ROAS</Th>
+              <Th col="halo" sort={famS.sort} toggle={famS.toggle} num>Halo %</Th>
               <Th col="orders" sort={famS.sort} toggle={famS.toggle} num>Orders</Th>
             </tr></thead>
             <tbody>{famS.sorted.map((r) => (
@@ -765,6 +776,8 @@ function AdsExplorer() {
                 <td><b>{r.family}</b></td><td className="num">{money(r.spend, 'CA')}</td>
                 <td className="num">{money(r.sales, 'CA')}</td>
                 <td className="num"><span className={'badge ' + (r.acos > 0.25 ? 'down' : r.acos ? 'up' : 'flat')}>{r.acos ? (r.acos * 100).toFixed(0) + '%' : '—'}</span></td>
+                <td className="num">{r.roas ? r.roas.toFixed(1) + 'x' : '—'}</td>
+                <td className="num">{r.halo == null ? '—' : pct(r.halo)}</td>
                 <td className="num">{num(r.orders)}</td></tr>))}
             </tbody></table></div>)}
       </div>
@@ -777,6 +790,9 @@ function AdsExplorer() {
               <Th col="spend" sort={kwSort} toggle={kwToggle} num>Spend</Th>
               <Th col="sales" sort={kwSort} toggle={kwToggle} num>Sales</Th>
               <Th col="acos" sort={kwSort} toggle={kwToggle} num>ACOS</Th>
+              <Th col="roas" sort={kwSort} toggle={kwToggle} num>ROAS</Th>
+              <Th col="cpc" sort={kwSort} toggle={kwToggle} num>CPC</Th>
+              <Th col="halo" sort={kwSort} toggle={kwToggle} num>Halo %</Th>
               <Th col="orders" sort={kwSort} toggle={kwToggle} num>Orders</Th>
               <Th col="sqp_volume" sort={kwSort} toggle={kwToggle} num>SQP vol/mo</Th>
               <Th col="clicks_l4w" sort={kwSort} toggle={kwToggle} num>Clicks L4W</Th>
@@ -790,6 +806,9 @@ function AdsExplorer() {
                 <td className="num">{money(r.spend, 'CA')}</td>
                 <td className="num">{money(r.sales, 'CA')}</td>
                 <td className="num"><span className={'badge ' + (r.acos > 0.25 ? 'down' : r.acos ? 'up' : 'flat')}>{r.acos ? (r.acos * 100).toFixed(0) + '%' : '—'}</span></td>
+                <td className="num">{r.roas ? r.roas.toFixed(1) + 'x' : '—'}</td>
+                <td className="num muted">{r.cpc ? money(r.cpc, 'CA') : '—'}</td>
+                <td className="num">{r.halo == null ? '—' : pct(r.halo)}</td>
                 <td className="num muted">{num(r.orders)}</td>
                 <td className="num">{r.sqp_volume == null ? '-' : num(r.sqp_volume)}</td>
                 <td className="num">{r.clicks_l4w == null ? '-' : num(r.clicks_l4w)}</td>
@@ -798,7 +817,7 @@ function AdsExplorer() {
                 <td className="num">{r.purch_share == null ? '-' : pct(r.purch_share)}</td>
               </tr>))}
             </tbody></table></div>)}
-        <div className="muted small" style={{ marginTop: 8 }}>Spend / Sales / Orders = ad totals over the selected months. <b>SQP vol</b>, <b>Clicks L4W</b> and <b>Impr / Click / Purch %</b> are the latest-month organic &amp; market signals for that search term (“-” if not in SQP / Datarova). Click any column to sort. Showing up to 400.</div>
+        <div className="muted small" style={{ marginTop: 8 }}>Spend / Sales / Orders = ad totals over the selected months. <b>ROAS</b> = sales ÷ spend; <b>CPC</b> = spend ÷ click; <b>Halo %</b> = share of ad sales from OTHER SKUs (total − advertised-SKU), so high halo means the term sells the catalog, not just the ad. <b>SQP vol</b>, <b>Clicks L4W</b> and <b>Impr / Click / Purch %</b> are the latest-month organic &amp; market signals for that term (“-” if not in SQP / Datarova). Click any column to sort. Showing up to 400.</div>
       </div>
     </div>
   )

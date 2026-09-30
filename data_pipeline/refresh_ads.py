@@ -26,21 +26,32 @@ def supa():
         dbname=os.environ.get('PGDATABASE', 'postgres'), sslmode='require', connect_timeout=40)
 
 # ── 1. pull + aggregate from Azure (SQL does the grouping) ────────────────────
+# Widened (Sprint 1): + units, advertised-SKU sales (halo base), and SB Top-of-Search impression share/rank.
+# Column order matches the fetch-loop unpack below: cid,cname,term,month,impr,clk,spend,sales,orders,units,adv_sku_sales,impr_share,impr_rank.
 SP_SQL = '''select campaign_id::bigint, max(campaign_name), customer_search_term, to_char(date,'YYYY-MM'),
     sum(impressions)::bigint, sum(clicks)::bigint, round(sum(spend)::numeric,2),
-    round(sum("7_day_total_sales")::numeric,2), sum("7_day_total_orders")::bigint
+    round(sum("7_day_total_sales")::numeric,2), sum("7_day_total_orders")::bigint,
+    sum("7_day_total_units")::bigint, round(sum("7_day_advertised_sku_sales")::numeric,2),
+    null::real, null::real
   from ads_sponsored_products_search_term
   where campaign_id is not null and customer_search_term is not null
   group by campaign_id, customer_search_term, to_char(date,'YYYY-MM')'''
-SB_SQL = SP_SQL.replace('ads_sponsored_products_search_term', 'ads_sponsored_brands_search_term') \
-               .replace('7_day_total_sales', '14_day_total_sales').replace('7_day_total_orders', '14_day_total_orders')
+# SB exposes only a 14-day window and no units; it DOES expose search-term impression share/rank.
+SB_SQL = '''select campaign_id::bigint, max(campaign_name), customer_search_term, to_char(date,'YYYY-MM'),
+    sum(impressions)::bigint, sum(clicks)::bigint, round(sum(spend)::numeric,2),
+    round(sum("14_day_total_sales")::numeric,2), sum("14_day_total_orders")::bigint,
+    null::bigint, round(sum("14_day_same_sku_sales")::numeric,2),
+    round(avg(search_term_impression_share)::numeric,4)::real, round(avg(search_term_impression_rank)::numeric,1)::real
+  from ads_sponsored_brands_search_term
+  where campaign_id is not null and customer_search_term is not null
+  group by campaign_id, customer_search_term, to_char(date,'YYYY-MM')'''
 
 az = azure(); ac = az.cursor()
 rows = []            # ad_searchterm rows
 for prog, sql in (('SP', SP_SQL), ('SB', SB_SQL)):
     ac.execute(sql)
-    for cid, cname, term, month, impr, clk, spend, sales, orders in ac.fetchall():
-        rows.append((REGION, prog, month, cid, clean(term), impr, clk, spend, sales, orders, clean(cname)))
+    for cid, cname, term, month, impr, clk, spend, sales, orders, units, adv, ishare, irank in ac.fetchall():
+        rows.append((REGION, prog, month, cid, clean(term), impr, clk, spend, sales, orders, units, adv, ishare, irank, clean(cname)))
     print(f"  Azure {prog}: {len([r for r in rows if r[1]==prog]):,} (campaign×term×month) rows")
 az.close()
 
@@ -53,12 +64,13 @@ print(f"  preserving {len(manual)} manual_family mappings")
 # ad_searchterm
 sc.execute("truncate ad_searchterm")
 execute_values(sc, """insert into ad_searchterm
-  (region,program,month,campaign_id,customer_search_term,impressions,clicks,spend,sales,orders) values %s""",
-  [r[:10] for r in rows], page_size=5000)
+  (region,program,month,campaign_id,customer_search_term,impressions,clicks,spend,sales,orders,
+   units,adv_sku_sales,impr_share,impr_rank) values %s""",
+  [r[:14] for r in rows], page_size=5000)
 
 # campaign_map skeleton (one row per program,campaign_id)
 cm = {}
-for region, prog, month, cid, term, impr, clk, spend, sales, orders, cname in rows:
+for region, prog, month, cid, term, impr, clk, spend, sales, orders, units, adv, ishare, irank, cname in rows:
     k = (prog, cid)
     x = cm.get(k)
     if not x: x = cm[k] = {'campaign_name': cname, 'spend': 0.0, 'sales': 0.0, 'terms': set()}

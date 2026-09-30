@@ -74,7 +74,8 @@ create or replace view v_ad_term_enriched with (security_invoker=on) as
   select t.region, t.program, t.month, t.family, t.customer_search_term as keyword,
          t.impressions, t.clicks, t.spend, t.sales, t.orders,
          m.clicks_l4w, ql.search_query_volume as sqp_volume,
-         ql.our_impr_share, ql.our_click_share, ql.our_purchase_share
+         ql.our_impr_share, ql.our_click_share, ql.our_purchase_share,
+         t.units, t.adv_sku_sales, t.impr_share as tos_impr_share, t.impr_rank as tos_impr_rank
   from v_ad_family_searchterm t
   left join kw_market m  on m.region=t.region and lower(m.keyword)=lower(t.customer_search_term)
   left join v_query_latest ql on ql.region=t.region and lower(ql.search_query)=lower(t.customer_search_term);
