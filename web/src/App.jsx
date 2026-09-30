@@ -8,6 +8,8 @@ const REGIONS = [{ id: 'US', label: 'USA (Amazon.com)' }, { id: 'CA', label: 'Ca
 const pct = (x) => (x == null ? '—' : (x * 100).toFixed(1) + '%')
 const num = (x) => (x == null ? '—' : Number(x).toLocaleString())
 const money = (x, r) => (x == null ? '—' : (r === 'CA' ? 'C$' : '$') + Number(x).toFixed(0))
+const MON_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+const fmtMonth = (m) => { if (!m) return ''; const [y, mm] = String(m).split('-'); return `${MON_ABBR[(+mm) - 1] || mm} ${y}` }
 
 // centralized chart tokens (light theme — mirror styles.css)
 const C = { grid: '#ece7de', axis: '#9a938a', tip: '#ffffff', line: '#0f766e',
@@ -1072,11 +1074,21 @@ function CatalogTab() {
 export default function App() {
   const [authed, setAuthed] = useState(false); const [ready, setReady] = useState(false)
   const [tab, setTab] = useState('dash'); const [region, setRegion] = useState('US')
+  const [dataRange, setDataRange] = useState('')
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => { setAuthed(!!data.session); setReady(true) })
     const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => setAuthed(!!session))
     return () => sub.subscription.unsubscribe()
   }, [])
+  useEffect(() => {
+    if (!authed) return
+    ;(async () => {
+      const lo = await supabase.from('category_month').select('month').order('month', { ascending: true }).limit(1)
+      const hi = await supabase.from('category_month').select('month').order('month', { ascending: false }).limit(1)
+      const a = lo.data?.[0]?.month, b = hi.data?.[0]?.month
+      if (a && b) setDataRange(`${fmtMonth(a)}–${fmtMonth(b)}`)
+    })().catch(() => {})
+  }, [authed])
   if (!ready) return <div className="app"><SkelRows n={4} /></div>
   if (!authed) return <Login onIn={() => setAuthed(true)} />
   const TABS = [['dash', 'Dashboard'], ['keyword', 'Keyword Explorer'], ['family', 'Family Explorer'], ['ranks', 'Organic Ranks'], ['ads', 'Ads'], ['map', 'Campaign Map'], ['cats', 'Categories'], ['asin', 'ASIN Explorer'], ['catalog', 'Catalog'], ['dl', 'Downloads']]
@@ -1124,7 +1136,7 @@ export default function App() {
         {tab === 'catalog' && <CatalogTab />}
         {tab === 'dl' && <Downloads region={region} />}
         <div className="muted small" style={{ marginTop: 20 }}>
-          Data: Amazon Brand Analytics SQP · Jul 2025–Jun 2026 · search-attributed purchases (not total units; excludes 1P/Vendor).
+          Data: Amazon Brand Analytics SQP · {dataRange || '…'} · search-attributed purchases (not total units; excludes 1P/Vendor).
         </div>
       </main>
     </div>

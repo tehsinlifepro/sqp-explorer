@@ -14,9 +14,9 @@ MASTERS={"CA":os.path.join(CA,"4_Data","LifePro_CA_SQP_master.csv"),
 NUM=['search_query_volume','total_query_impression_count','total_click_count','total_cart_add_count',
  'total_purchase_count','asin_impression_count','asin_click_count','asin_cart_add_count','asin_purchase_count',
  'total_median_purchase_price_amount','asin_median_purchase_price_amount']
-def wavg(v,w):
+def wavg(v,w,floor=0):
     v=pd.to_numeric(v,errors='coerce');w=pd.to_numeric(w,errors='coerce').fillna(0)
-    m=v.notna()&(w>0); return round(float(np.average(v[m],weights=w[m])),2) if m.any() else None
+    m=v.notna()&(w>0)&(v>floor); return round(float(np.average(v[m],weights=w[m])),2) if m.any() else None
 
 catalog=[]; cat_month=[]; fam_sum=[]; asin_month=[]
 for region,path in MASTERS.items():
@@ -39,7 +39,7 @@ for region,path in MASTERS.items():
             if b.empty and fam.empty: continue
             mi=b.total_query_impression_count.sum();mc=b.total_click_count.sum();mca=b.total_cart_add_count.sum();mp=b.total_purchase_count.sum()
             fi=fam.asin_impression_count.sum();fc=fam.asin_click_count.sum();fca=fam.asin_cart_add_count.sum();fp=fam.asin_purchase_count.sum()
-            op=wavg(fam.asin_median_purchase_price_amount,fam.asin_purchase_count); npx=wavg(b.total_median_purchase_price_amount,b.total_purchase_count)
+            op=wavg(fam.asin_median_purchase_price_amount,fam.asin_purchase_count,floor=5); npx=wavg(b.total_median_purchase_price_amount,b.total_purchase_count,floor=5)
             cat_month.append(dict(region=region,category=category,month=m,core_queries=int(b.search_query.nunique()),
                 market_search_volume=int(b.search_query_volume.sum()),market_impressions=int(mi),market_clicks=int(mc),
                 market_cart_adds=int(mca),market_purchases=int(mp),market_cvr=round(mp/mc,4) if mc else None,
