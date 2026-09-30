@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { supabase, VIEWER_EMAIL } from './supabaseClient'
 import {
-  LineChart, Line, AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
+  LineChart, Line, AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend, ReferenceLine,
 } from 'recharts'
 
 const REGIONS = [{ id: 'US', label: 'USA (Amazon.com)' }, { id: 'CA', label: 'Canada (Amazon.ca)' }]
@@ -823,6 +823,95 @@ function AdsExplorer() {
   )
 }
 
+/* ---------------- TACOS engine (total-sales efficiency + reinvest budget) — Canada only ---------------- */
+const daysInMonth = (mm) => { if (!mm) return 30; const [y, mo] = String(mm).split('-').map(Number); return new Date(y, mo, 0).getDate() }
+function TacosExplorer() {
+  const { rows, loading, error } = useRows('v_tacos_family_month', { region: 'CA' })
+  const [ceiling, setCeiling] = useState(22)                 // % — course default; editable
+  const cf = (Number(ceiling) || 0) / 100
+  const CUR_YM = new Date().toISOString().slice(0, 7)        // current calendar month 'YYYY-MM'
+  // "Closed" months = strictly before the current calendar month AND with retail sales loaded. Keyed off the
+  // calendar (not sales==0 per row) so a partial month-to-date row can't sneak in as a spurious TACOS spike;
+  // within a closed month we keep ALL family rows — including ads-but-no-sales — so their spend still counts.
+  const closed = useMemo(() => {
+    const salesByM = {}
+    rows.forEach((r) => { if (r.month < CUR_YM) salesByM[r.month] = (salesByM[r.month] || 0) + (r.ordered_rev || 0) })
+    return new Set(Object.entries(salesByM).filter(([, s]) => s > 0).map(([m]) => m))
+  }, [rows, CUR_YM])
+  const months = useMemo(() => [...closed].sort(), [closed])
+  const mr = useMonthRange(months)
+  const inr = useMemo(() => rows.filter((r) => closed.has(r.month) && mr.inRange(r.month)), [rows, closed, mr.from, mr.to])
+  const series = useMemo(() => {
+    const m = {}
+    inr.forEach((r) => { const x = (m[r.month] = m[r.month] || { month: r.month, sales: 0, spend: 0, ad_sales: 0 }); x.sales += r.ordered_rev || 0; x.spend += r.ad_spend || 0; x.ad_sales += r.ad_sales || 0 })
+    return Object.values(m).sort((a, b) => a.month.localeCompare(b.month))
+      .map((x) => ({ ...x, tacos: x.sales ? x.spend / x.sales : null, acos: x.ad_sales ? x.spend / x.ad_sales : null, ceiling: cf }))
+  }, [inr, cf])
+  const last = series[series.length - 1] || {}
+  const headroomDay = last.sales != null ? Math.max(0, (cf - (last.tacos || 0))) * last.sales / daysInMonth(last.month) : null
+  const famTable = useMemo(() => {
+    const m = {}
+    inr.forEach((r) => { if (!r.family) return; const x = (m[r.family] = m[r.family] || { family: r.family, sales: 0, spend: 0, ad_sales: 0, ad_orders: 0 }); x.sales += r.ordered_rev || 0; x.spend += r.ad_spend || 0; x.ad_sales += r.ad_sales || 0; x.ad_orders += r.ad_orders || 0 })
+    return Object.values(m).map((x) => { const tacos = x.sales ? x.spend / x.sales : null
+      return { ...x, tacos, acos: x.ad_sales ? x.spend / x.ad_sales : null,
+        headroom: tacos == null ? null : Math.max(0, (cf - tacos)) * x.sales } })
+  }, [inr, cf])
+  const fs = useSort(famTable, { col: 'sales', dir: 'desc' })
+  if (error) return <ErrorBanner msg={error} />
+  return (
+    <div>
+      <div className="controls">
+        <MonthRange r={mr} />
+        <div className="field"><label htmlFor="tacos-ceil">TACOS ceiling %</label>
+          <input id="tacos-ceil" type="number" min="0" max="100" step="0.5" value={ceiling}
+                 onChange={(e) => { const v = e.target.value; setCeiling(v === '' ? '' : Math.max(0, Math.min(100, Number(v) || 0))) }} style={{ width: 90 }} /></div>
+        <span className="muted small" style={{ alignSelf: 'flex-end' }}>Canada · Vendor Central</span>
+      </div>
+      <div className="kpis" style={{ marginBottom: 16 }}>
+        <div className="kpi"><div className="v">{loading ? '…' : money(last.sales, 'CA')}</div><div className="l">Total sales · {fmtMonth(last.month) || 'latest mo'}</div></div>
+        <div className="kpi"><div className="v">{loading ? '…' : money(last.spend, 'CA')}</div><div className="l">Ad spend</div></div>
+        <div className="kpi"><div className="v">{loading ? '…' : (last.tacos != null ? pct(last.tacos) : '—')}</div><div className="l">TACOS (vs {ceiling}% ceiling)</div></div>
+        <div className="kpi"><div className="v">{loading ? '…' : (headroomDay != null ? money(headroomDay, 'CA') + '/day' : '—')}</div><div className="l">Reinvest room/day · {fmtMonth(last.month) || 'last mo'}</div></div>
+      </div>
+      <div className="card"><h3>Account TACOS vs ceiling</h3>
+        {loading ? <SkelChart /> : !series.length ? <Empty /> : (
+          <ResponsiveContainer width="100%" height={260}><LineChart data={series} margin={{ left: -6 }}>
+            <CartesianGrid stroke={C.grid} strokeDasharray="3 3" /><XAxis dataKey="month" tick={axisTick} />
+            <YAxis tick={axisTick} tickFormatter={(v) => (v * 100).toFixed(0) + '%'} />
+            <Tooltip contentStyle={tipStyle} formatter={(v) => pct(v)} /><Legend wrapperStyle={{ fontSize: 11 }} />
+            <ReferenceLine y={cf} stroke={C.warn} strokeDasharray="5 4" label={{ value: `ceiling ${ceiling}%`, fill: C.warn, fontSize: 11, position: 'insideTopRight' }} />
+            <Line dataKey="tacos" stroke={C.line} strokeWidth={2} dot={false} name="TACOS" isAnimationActive={!REDUCED} />
+            <Line dataKey="acos" stroke={C.muted} dot={false} name="ACOS" isAnimationActive={!REDUCED} />
+          </LineChart></ResponsiveContainer>)}
+        <div className="muted small" style={{ marginTop: 8 }}>TACOS = ad spend ÷ total ordered (retail) sales. Below the ceiling = room to spend more; above = pull back. ACOS shown for contrast (ad-sales only).</div>
+      </div>
+      <div className="card"><h3>Families · TACOS &amp; reinvest headroom <span className="muted small">({fs.sorted.length}) · selected months</span></h3>
+        {loading ? <SkelRows n={8} /> : !fs.sorted.length ? <Empty /> : (
+          <div className="table-scroll"><table>
+            <thead><tr>
+              <Th col="family" sort={fs.sort} toggle={fs.toggle}>Family</Th>
+              <Th col="sales" sort={fs.sort} toggle={fs.toggle} num>Total sales</Th>
+              <Th col="spend" sort={fs.sort} toggle={fs.toggle} num>Ad spend</Th>
+              <Th col="tacos" sort={fs.sort} toggle={fs.toggle} num>TACOS</Th>
+              <Th col="acos" sort={fs.sort} toggle={fs.toggle} num>ACOS</Th>
+              <Th col="headroom" sort={fs.sort} toggle={fs.toggle} num>Headroom (to {ceiling}%)</Th>
+            </tr></thead>
+            <tbody>{fs.sorted.map((r) => (
+              <tr key={r.family}>
+                <td><b>{r.family}</b></td>
+                <td className="num">{money(r.sales, 'CA')}</td>
+                <td className="num">{money(r.spend, 'CA')}</td>
+                <td className="num"><span className={'badge ' + (r.tacos == null ? 'flat' : r.tacos <= cf ? 'up' : 'down')}>{r.tacos == null ? '—' : pct(r.tacos)}</span></td>
+                <td className="num muted">{r.acos == null ? '—' : pct(r.acos)}</td>
+                <td className="num">{r.headroom == null ? '—' : money(r.headroom, 'CA')}</td>
+              </tr>))}
+            </tbody></table></div>)}
+        <div className="muted small" style={{ marginTop: 8 }}><b>Headroom</b> = (ceiling − TACOS) × sales — the extra ad budget a family can absorb over the selected months and still finish under the ceiling. Green TACOS = under ceiling (room to scale); red = over (rein in). Covers catalogued families (~96% of account sales). Margin isn't shown (retail COGS here is Amazon's cost, not LifePro's — use the Blended sheet).</div>
+      </div>
+    </div>
+  )
+}
+
 /* ---------------- Campaign Map (editable, read-write) ---------------- */
 function CampaignMapping() {
   const [rows, setRows] = useState([]); const [loading, setLoading] = useState(true); const [err, setErr] = useState(null)
@@ -1110,7 +1199,7 @@ export default function App() {
   }, [authed])
   if (!ready) return <div className="app"><SkelRows n={4} /></div>
   if (!authed) return <Login onIn={() => setAuthed(true)} />
-  const TABS = [['dash', 'Dashboard'], ['keyword', 'Keyword Explorer'], ['family', 'Family Explorer'], ['ranks', 'Organic Ranks'], ['ads', 'Ads'], ['map', 'Campaign Map'], ['cats', 'Categories'], ['asin', 'ASIN Explorer'], ['catalog', 'Catalog'], ['dl', 'Downloads']]
+  const TABS = [['dash', 'Dashboard'], ['keyword', 'Keyword Explorer'], ['family', 'Family Explorer'], ['ranks', 'Organic Ranks'], ['ads', 'Ads'], ['tacos', 'TACOS'], ['map', 'Campaign Map'], ['cats', 'Categories'], ['asin', 'ASIN Explorer'], ['catalog', 'Catalog'], ['dl', 'Downloads']]
   const SI = (d) => <svg viewBox="0 0 24 24"><path d={d} /></svg>
   const ICONS = {
     dash: <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg>,
@@ -1118,6 +1207,7 @@ export default function App() {
     family: SI('M4 18V9m5 9V5m5 13v-6m5 6V8'),
     ranks: SI('M4 20V8m5 12v-7m5 7V4m5 16v-9'),
     ads: SI('M3 12h4l3 8 4-16 3 8h4'),
+    tacos: <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="3.5" /><path d="M12 3v3M12 18v3M3 12h3M18 12h3" /></svg>,
     map: SI('M9 3l6 3 6-3v15l-6 3-6-3-6 3V6zM9 3v15M15 6v15'),
     cats: <svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2" /><path d="M4 10h16" /></svg>,
     asin: SI('M20 7l-8-4-8 4 8 4 8-4zM4 7v10l8 4 8-4V7M12 11v10'),
@@ -1149,6 +1239,7 @@ export default function App() {
         {tab === 'family' && <FamilyExplorer region={region} />}
         {tab === 'ranks' && <OrganicRanks region={region} />}
         {tab === 'ads' && <AdsExplorer />}
+        {tab === 'tacos' && <TacosExplorer />}
         {tab === 'map' && <CampaignMapping />}
         {tab === 'cats' && <Categories region={region} />}
         {tab === 'asin' && <AsinExplorer region={region} />}
