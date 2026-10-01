@@ -61,4 +61,13 @@ $PY data_pipeline/refresh_advertised.py 2>&1 | tee -a "$LOG"
 echo "--- Sponsored Display ---" | tee -a "$LOG"
 $PY data_pipeline/refresh_sd.py 2>&1 | tee -a "$LOG"
 
+# 8b. SP detail + SD WEEKLY (Sprint W3). Apply the weekly detail schema (tables + views), then load the
+# weekly twins (targeting / placement / advertised / SD), ISO Monday weeks. Needs campaign_map + catalog.
+echo "--- SP detail + SD (weekly) ---" | tee -a "$LOG"
+$PY data_pipeline/apply_sql.py data_pipeline/ad_detail_week_schema.sql 2>&1 | tee -a "$LOG"
+GRAIN=week $PY data_pipeline/refresh_targeting.py  2>&1 | tee -a "$LOG"
+GRAIN=week $PY data_pipeline/refresh_placements.py 2>&1 | tee -a "$LOG"
+GRAIN=week $PY data_pipeline/refresh_advertised.py 2>&1 | tee -a "$LOG"
+GRAIN=week $PY data_pipeline/refresh_sd.py          2>&1 | tee -a "$LOG"
+
 echo "===== done $(date '+%H:%M:%S') =====" | tee -a "$LOG"

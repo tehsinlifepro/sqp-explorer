@@ -10,6 +10,12 @@ Run: cd ~/Downloads/sqp-explorer && set -a && . .secrets/supabase.env && set +a 
 import os, re, psycopg2
 from psycopg2.extras import execute_values
 REGION = 'CA'
+# GRAIN switch: 'month' (default) → sd_campaign_month; 'week' → sd_campaign_week (ISO Monday week-start).
+GRAIN = os.environ.get('GRAIN', 'month')
+PEXPR = "to_char(date,'YYYY-MM')" if GRAIN == 'month' else "date_trunc('week',date)::date"
+TBL   = 'sd_campaign_month' if GRAIN == 'month' else 'sd_campaign_week'
+PCOL  = 'month' if GRAIN == 'month' else 'week'
+PTYPE = 'text' if GRAIN == 'month' else 'date'
 clean = lambda s: re.sub(r'[\r\n\t\x00]', ' ', s).strip() if s else s
 
 def azure():
@@ -21,36 +27,36 @@ def supa():
         user=os.environ['PGUSER'], password=os.environ['PGPASSWORD'],
         dbname=os.environ.get('PGDATABASE', 'postgres'), sslmode='require', connect_timeout=40)
 
-SQL = """select campaign_id::bigint, max(campaign_name), to_char(date,'YYYY-MM') as month,
+SQL = f"""select campaign_id::bigint, max(campaign_name), {PEXPR} as {PCOL},
     sum(impressions)::bigint, sum(clicks)::bigint, round(sum(spend)::numeric,2),
     round(sum("14_day_total_sales")::numeric,2), sum("14_day_total_orders")::bigint,
     round(sum("14_day_new_to_brand_sales")::numeric,2), sum("14_day_new_to_brand_orders")::bigint,
     sum("14_day_dpv")::bigint, sum(add_to_cart)::bigint, round(sum("view_attributed_sales_14d")::numeric,2)
   from ads_sponsored_display_campaign
   where campaign_id is not null and date is not null
-  group by campaign_id, to_char(date,'YYYY-MM')"""
+  group by campaign_id, {PEXPR}"""
 
 az = azure(); ac = az.cursor(); ac.execute(SQL)
-rows = [(REGION, month, cid, clean(cname), impr, clk, spend, sales, orders, ntbs, ntbo, dpv, atc, vsales)
-        for cid, cname, month, impr, clk, spend, sales, orders, ntbs, ntbo, dpv, atc, vsales in ac.fetchall()]
+rows = [(REGION, period, cid, clean(cname), impr, clk, spend, sales, orders, ntbs, ntbo, dpv, atc, vsales)
+        for cid, cname, period, impr, clk, spend, sales, orders, ntbs, ntbo, dpv, atc, vsales in ac.fetchall()]
 az.close()
-print(f"  Azure SD campaigns: {len(rows):,} (campaign×month) rows")
+print(f"  Azure SD campaigns: {len(rows):,} (campaign×{PCOL}) rows")
 
 sp = supa(); sc = sp.cursor()
-sc.execute("""create table if not exists sd_campaign_month (
-  region text, month text, campaign_id bigint, campaign_name text,
+sc.execute(f"""create table if not exists {TBL} (
+  region text, {PCOL} {PTYPE}, campaign_id bigint, campaign_name text,
   impressions bigint, clicks bigint, spend numeric, sales numeric, orders bigint,
   ntb_sales numeric, ntb_orders bigint, dpv bigint, atc bigint, view_sales numeric,
-  primary key (region, month, campaign_id));""")
-execute_values(sc, """insert into sd_campaign_month
-  (region,month,campaign_id,campaign_name,impressions,clicks,spend,sales,orders,ntb_sales,ntb_orders,dpv,atc,view_sales) values %s
-  on conflict (region,month,campaign_id) do update set
+  primary key (region, {PCOL}, campaign_id));""")
+execute_values(sc, f"""insert into {TBL}
+  (region,{PCOL},campaign_id,campaign_name,impressions,clicks,spend,sales,orders,ntb_sales,ntb_orders,dpv,atc,view_sales) values %s
+  on conflict (region,{PCOL},campaign_id) do update set
     campaign_name=excluded.campaign_name, impressions=excluded.impressions, clicks=excluded.clicks,
     spend=excluded.spend, sales=excluded.sales, orders=excluded.orders, ntb_sales=excluded.ntb_sales,
     ntb_orders=excluded.ntb_orders, dpv=excluded.dpv, atc=excluded.atc, view_sales=excluded.view_sales""",
   rows, page_size=5000)
 sp.commit()
-sc.execute("select min(month),max(month),count(*) from sd_campaign_month")
-print("  sd_campaign_month:", sc.fetchone())
+sc.execute(f"select min({PCOL}),max({PCOL}),count(*) from {TBL}")
+print(f"  {TBL}:", sc.fetchone())
 sp.close()
 print("✓ refresh_sd complete (accumulator: upserted)")

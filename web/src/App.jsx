@@ -733,12 +733,15 @@ function AdsExplorer() {
   const tot = scope.reduce((s, r) => ({ spend: s.spend + (r.spend || 0), sales: s.sales + (r.sales || 0), orders: s.orders + (r.orders || 0) }), { spend: 0, sales: 0, orders: 0 })
 
   // deep-dive: keyword (search-term) level for the selected family
-  const { rows: termsRaw, loading: tl } = useRows(`v_ad_term_enriched_${grain}`, family ? { region: 'CA', family } : { region: 'CA', family: '__none__' })
+  const { rows: termsRaw, loading: tl } = useRows(grain === 'week' ? 'v_ad_term_enriched_week' : 'v_ad_term_enriched', family ? { region: 'CA', family } : { region: 'CA', family: '__none__' })
   const terms = useMemo(() => grain === 'week' ? termsRaw.map((r) => ({ ...r, month: r.week })) : termsRaw, [termsRaw, grain])
-  // placement / advertised-child / SD detail are monthly-only in W2 (weekly twins land in Sprint W3)
-  const { rows: plc } = useRows('v_placement_family_month', { region: 'CA' })
-  const { rows: adasin } = useRows('v_ad_asin_month', { region: 'CA' })
-  const { rows: sd } = useRows('v_sd_month', { region: 'CA' })
+  // placement / advertised-child / SD detail — weekly twins added in Sprint W3 (alias week→month)
+  const { rows: plcRaw } = useRows(`v_placement_family_${grain}`, { region: 'CA' })
+  const plc = useMemo(() => grain === 'week' ? plcRaw.map((r) => ({ ...r, month: r.week })) : plcRaw, [plcRaw, grain])
+  const { rows: adasinRaw } = useRows(`v_ad_asin_${grain}`, { region: 'CA' })
+  const adasin = useMemo(() => grain === 'week' ? adasinRaw.map((r) => ({ ...r, month: r.week })) : adasinRaw, [adasinRaw, grain])
+  const { rows: sdRaw } = useRows(`v_sd_${grain}`, { region: 'CA' })
+  const sd = useMemo(() => grain === 'week' ? sdRaw.map((r) => ({ ...r, month: r.week })) : sdRaw, [sdRaw, grain])
   const kf = useKwFilter()
   const kwAgg = useMemo(() => {
     const m = {}
@@ -885,8 +888,7 @@ function AdsExplorer() {
             </tbody></table></div>)}
         <div className="muted small" style={{ marginTop: 8 }}>Spend / Sales / Orders = ad totals over the selected months. <b>ROAS</b> = sales ÷ spend; <b>CPC</b> = spend ÷ click; <b>Halo %</b> = share of ad sales from OTHER SKUs (total − advertised-SKU), so high halo means the term sells the catalog, not just the ad. <b>SQP vol</b>, <b>Clicks L4W</b> and <b>Impr / Click / Purch %</b> are the latest-month organic &amp; market signals for that term (“-” if not in SQP / Datarova). Click any column to sort. Showing up to 400.</div>
       </div>
-      {grain === 'week' && (<div className="card" style={{ padding: '12px 16px' }}><div className="muted small">Placement mix, children-by-CVR and Sponsored Display are <b>monthly-only</b> for now — their weekly views ship in a later sprint. Switch to Monthly to see them.</div></div>)}
-      {prog !== 'SB' && grain === 'month' && (<div className="card"><h3>Placement mix · {family} <span className="muted small">where spend goes &amp; which converts (Sponsored Products)</span></h3>
+      {prog !== 'SB' && (<div className="card"><h3>Placement mix · {family} <span className="muted small">where spend goes &amp; which converts (Sponsored Products)</span></h3>
         {!plcAgg.length ? <Empty msg="No placement data for this family in range." /> : (
           <div className="table-scroll"><table>
             <thead><tr><th>Placement</th><th className="num">Spend</th><th className="num">% of spend</th><th className="num">ACOS</th><th className="num">Orders</th></tr></thead>
@@ -901,7 +903,7 @@ function AdsExplorer() {
             </tbody></table></div>)}
         <div className="muted small" style={{ marginTop: 8 }}><b>Top of Search</b> usually costs more but buys ranking — a high Top-of-Search ACOS is the price of the ranking phase. <b>Off Amazon</b> converting poorly is the first thing to trim.</div>
       </div>)}
-      {prog !== 'SB' && grain === 'month' && (<div className="card"><h3>Children by ad CVR · {family} <span className="muted small">which variation to advertise (Sponsored Products)</span></h3>
+      {prog !== 'SB' && (<div className="card"><h3>Children by ad CVR · {family} <span className="muted small">which variation to advertise (Sponsored Products)</span></h3>
         {!childAgg.length ? <Empty msg="No advertised-product data for this family in range." /> : (
           <div className="table-scroll"><table>
             <thead><tr><th>ASIN</th><th>Model</th><th className="num">Clicks</th><th className="num">Orders</th><th className="num">Ad CVR</th><th className="num">Spend</th><th className="num">Halo %</th></tr></thead>
@@ -918,7 +920,7 @@ function AdsExplorer() {
             </tbody></table></div>)}
         <div className="muted small" style={{ marginTop: 8 }}>Advertise the <b>highest-CVR child</b> — ranking gains concentrate on it. <b>Halo %</b> = share of this ASIN's ad sales that landed on OTHER SKUs; a high-halo child pulls the whole family.</div>
       </div>)}
-      {grain === 'month' && (<div className="card"><h3>Sponsored Display · account <span className="muted small">upper funnel — new-to-brand, DPV, ATC (selected months)</span></h3>
+      <div className="card"><h3>Sponsored Display · account <span className="muted small">upper funnel — new-to-brand, DPV, ATC (selected {grain === 'week' ? 'weeks' : 'months'})</span></h3>
         <div className="kpis">
           <div className="kpi"><div className="v">{money(sdAgg.spend, 'CA')}</div><div className="l">SD spend</div></div>
           <div className="kpi"><div className="v">{money(sdAgg.sales, 'CA')}</div><div className="l">SD sales</div></div>
@@ -928,7 +930,7 @@ function AdsExplorer() {
           <div className="kpi"><div className="v">{num(sdAgg.atc)}</div><div className="l">Add-to-cart</div></div>
         </div>
         <div className="muted small" style={{ marginTop: 8 }}>Sponsored Display is the brand-building / retargeting lever; a high <b>new-to-brand %</b> means it's bringing NEW customers. LifePro runs it lightly — an upper-funnel opportunity.</div>
-      </div>)}
+      </div>
     </div>
   )
 }
@@ -1080,8 +1082,12 @@ function TacosExplorer() {
 /* ---------------- Optimize (wasted spend + harvest) — Canada only ---------------- */
 const mtLabel = (m) => (m && m.startsWith('TARGETING_EXPRESSION') ? 'Auto' : m || '—')
 function OptimizeExplorer() {
-  const { rows: tgt, loading: tl, error: te } = useRows('v_targeting_enriched', { region: 'CA' })
-  const { rows: harvest, loading: hl, error: he } = useRows('v_ad_harvest', { region: 'CA' })
+  const [grain, setGrain] = useState('month')
+  const PL = grain === 'week' ? 'weeks' : 'months'
+  // monthly targeting view is v_targeting_enriched (no _month suffix); weekly is v_targeting_enriched_week
+  const { rows: tgtRaw, loading: tl, error: te } = useRows(grain === 'week' ? 'v_targeting_enriched_week' : 'v_targeting_enriched', { region: 'CA' })
+  const tgt = useMemo(() => grain === 'week' ? tgtRaw.map((r) => ({ ...r, month: r.week })) : tgtRaw, [tgtRaw, grain])
+  const { rows: harvest, loading: hl, error: he } = useRows('v_ad_harvest', { region: 'CA' })  // lifetime (grain-independent)
   const months = useMemo(() => [...new Set(tgt.map((r) => r.month))].sort(), [tgt])
   const mr = useMonthRange(months)
   const wasted = useMemo(() => {
@@ -1104,8 +1110,9 @@ function OptimizeExplorer() {
   return (
     <div>
       <div className="controls">
+        <GrainToggle grain={grain} setGrain={setGrain} />
         <MonthRange r={mr} />
-        <span className="muted small" style={{ alignSelf: 'flex-end' }}>Canada · Sponsored Products</span>
+        <span className="muted small" style={{ alignSelf: 'flex-end' }}>Canada · Sponsored Products{grain === 'week' && months.length ? ` · weekly from ${fmtWeek(months[0])}` : ''}</span>
       </div>
       <div className="kpis" style={{ marginBottom: 16 }}>
         <div className="kpi"><div className="v">{tl ? '…' : money(totWasted, 'CA')}</div><div className="l">Wasted spend (range)</div></div>
@@ -1113,7 +1120,7 @@ function OptimizeExplorer() {
         <div className="kpi"><div className="v">{hl ? '…' : num(harv.length)}</div><div className="l">Harvest candidates</div></div>
         <div className="kpi"><div className="v">{hl ? '…' : money(totHarvSales, 'CA')}</div><div className="l">Harvest sales (all-time)</div></div>
       </div>
-      <div className="card"><h3>Wasted spend — targets with spend &amp; zero orders <span className="muted small">({wS.sorted.length}) · selected months</span></h3>
+      <div className="card"><h3>Wasted spend — targets with spend &amp; zero orders <span className="muted small">({wS.sorted.length}) · selected {PL}</span></h3>
         {tl ? <SkelRows n={10} /> : !wS.sorted.length ? <Empty msg="No zero-order spend in range — clean." /> : (
           <div className="table-scroll"><table>
             <thead><tr>
@@ -1136,7 +1143,7 @@ function OptimizeExplorer() {
                 <td className="num muted">{r.bid == null ? '—' : money(r.bid, 'CA')}</td>
               </tr>))}
             </tbody></table></div>)}
-        <div className="muted small" style={{ marginTop: 8 }}>Spend with <b>0 orders</b> over the selected months — negate the search term or drop the target. “Auto” = auto/predefined targeting. Showing up to 400.</div>
+        <div className="muted small" style={{ marginTop: 8 }}>Spend with <b>0 orders</b> over the selected {PL} — negate the search term or drop the target. “Auto” = auto/predefined targeting. Showing up to 400.</div>
       </div>
       <div className="card"><h3>Harvest — converting terms not yet exact <span className="muted small">({hS.sorted.length})</span></h3>
         {hl ? <SkelRows n={10} /> : !hS.sorted.length ? <Empty /> : (
@@ -1170,18 +1177,25 @@ const REC_TYPES = [['all', 'All'], ['cut', 'Cut waste'], ['bid', 'Bid'], ['harve
 const recBadge = (t) => 'badge ' + (t === 'cut' ? 'down' : t === 'reinvest' || t === 'harvest' ? 'up' : 'flat')
 function RecommendationsExplorer() {
   const CUT_MIN = 50, HARVEST_MIN = 5, RECOVER_MIN = 100, CEIL = 0.22, REINVEST_MIN = 500, PLC_GAP = 0.03, PLC_MIN = 200, VAR_MINCLK = 20, VAR_GAP = 0.02
-  const { rows: tgt, loading: l1 } = useRows('v_targeting_enriched', { region: 'CA' })
-  const { rows: harvest, loading: l2 } = useRows('v_ad_harvest', { region: 'CA' })
-  const { rows: rankkw, loading: l3 } = useRows('v_rank_kw_enriched', { region: 'CA' })
-  const { rows: tac, loading: l4 } = useRows('v_tacos_family_month', { region: 'CA' })
-  const { rows: plc, loading: l5 } = useRows('v_placement_family_month', { region: 'CA' })
-  const { rows: adasin, loading: l6 } = useRows('v_ad_asin_month', { region: 'CA' })
+  const [grain, setGrain] = useState('month')
+  // monthly targeting view has no _month suffix; the others follow v_X_${grain}. Harvest + rank are lifetime.
+  const { rows: tgtRaw, loading: l1 } = useRows(grain === 'week' ? 'v_targeting_enriched_week' : 'v_targeting_enriched', { region: 'CA' })
+  const tgt = useMemo(() => grain === 'week' ? tgtRaw.map((r) => ({ ...r, month: r.week })) : tgtRaw, [tgtRaw, grain])
+  const { rows: harvest, loading: l2 } = useRows('v_ad_harvest', { region: 'CA' })       // lifetime
+  const { rows: rankkw, loading: l3 } = useRows('v_rank_kw_enriched', { region: 'CA' })   // lifetime
+  const { rows: tacRaw, loading: l4 } = useRows(`v_tacos_family_${grain}`, { region: 'CA' })
+  const tac = useMemo(() => grain === 'week' ? tacRaw.map((r) => ({ ...r, month: r.week })) : tacRaw, [tacRaw, grain])
+  const { rows: plcRaw, loading: l5 } = useRows(`v_placement_family_${grain}`, { region: 'CA' })
+  const plc = useMemo(() => grain === 'week' ? plcRaw.map((r) => ({ ...r, month: r.week })) : plcRaw, [plcRaw, grain])
+  const { rows: adasinRaw, loading: l6 } = useRows(`v_ad_asin_${grain}`, { region: 'CA' })
+  const adasin = useMemo(() => grain === 'week' ? adasinRaw.map((r) => ({ ...r, month: r.week })) : adasinRaw, [adasinRaw, grain])
   const loading = l1 || l2 || l3 || l4 || l5 || l6
   const [typeF, setTypeF] = useState('all'); const [familyF, setFamilyF] = useState('All')
   const months = useMemo(() => [...new Set(tgt.map((r) => r.month))].sort(), [tgt])
   const mr = useMonthRange(months)
-  // default to the last 3 months — recommendations should act on recent performance, not 18-month sums
-  useEffect(() => { if (months.length) mr.setFrom(months[Math.max(0, months.length - 3)]) }, [months.length]) // eslint-disable-line
+  // default to recent performance — last 3 months, or last 8 weeks — not 18-month sums
+  const DEF_BACK = grain === 'week' ? 8 : 3
+  useEffect(() => { if (months.length) mr.setFrom(months[Math.max(0, months.length - DEF_BACK)]) }, [months.length, grain]) // eslint-disable-line
 
   // account ACoS benchmark (the "compared to overall" number SellerMate anchors reasons on)
   const accBench = useMemo(() => {
@@ -1294,6 +1308,7 @@ function RecommendationsExplorer() {
   return (
     <div>
       <div className="controls">
+        <GrainToggle grain={grain} setGrain={setGrain} />
         <div className="field"><label htmlFor="rec-fam">Family</label>
           <select id="rec-fam" value={familyF} onChange={(e) => setFamilyF(e.target.value)}>{families.map((f) => <option key={f}>{f}</option>)}</select></div>
         <MonthRange r={mr} />
@@ -1329,7 +1344,7 @@ function RecommendationsExplorer() {
                 <td className="num">{money(r.impact, 'CA')}</td>
               </tr>))}
             </tbody></table></div>)}
-        <div className="muted small" style={{ marginTop: 8 }}>Every recommendation is derived from your own data (rule-based — no AI guessing), each reason benchmarked against your account ACoS. <b>C$ at stake</b> = spend saved (Cut/Recover), over-benchmark spend or absorbable headroom (Bid), sales in play (Harvest), headroom to deploy (Reinvest), est. savings (Placement), or reallocatable spend (Variation). <b>Harvest &amp; Recover use lifetime data</b>; the month range drives the other types. Canada · Sponsored Products. Showing up to 500.</div>
+        <div className="muted small" style={{ marginTop: 8 }}>Every recommendation is derived from your own data (rule-based — no AI guessing), each reason benchmarked against your account ACoS. <b>C$ at stake</b> = spend saved (Cut/Recover), over-benchmark spend or absorbable headroom (Bid), sales in play (Harvest), headroom to deploy (Reinvest), est. savings (Placement), or reallocatable spend (Variation). <b>Harvest &amp; Recover use lifetime data</b>; the selected {grain === 'week' ? 'week' : 'month'} range drives the other types. Canada · Sponsored Products. Showing up to 500.</div>
       </div>
     </div>
   )
@@ -1504,8 +1519,16 @@ function OrganicRanks({ region }) {
   const allDates = useMemo(() => [...new Set(days.filter((r) => r.family === family).map((r) => r.date))].sort(), [days, family])
   const [from, setFrom] = useState(''); const [to, setTo] = useState('')
   useEffect(() => { if (allDates.length) { setFrom(allDates[0]); setTo(allDates[allDates.length - 1]) } }, [family, allDates.length]) // eslint-disable-line
-  const series = useMemo(() => days.filter((r) => r.family === family && (!from || r.date >= from) && (!to || r.date <= to))
-    .sort((a, b) => a.date.localeCompare(b.date)), [days, family, from, to])
+  // ranks are daily; the chart can roll up to ISO weeks (end-of-week snapshot — rank is state, not additive)
+  const [rgrain, setRgrain] = useState('day')
+  const series = useMemo(() => {
+    const daily = days.filter((r) => r.family === family && (!from || r.date >= from) && (!to || r.date <= to))
+      .sort((a, b) => a.date.localeCompare(b.date))
+    if (rgrain !== 'week') return daily
+    const mondayOf = (d) => { const x = new Date(d + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() - ((x.getUTCDay() + 6) % 7)); return x.toISOString().slice(0, 10) }
+    const wk = {}; daily.forEach((r) => { wk[mondayOf(r.date)] = { ...r, date: mondayOf(r.date) } })  // last day of each week wins (sorted asc)
+    return Object.values(wk).sort((a, b) => a.date.localeCompare(b.date))
+  }, [days, family, from, to, rgrain])
   const last = series[series.length - 1] || {}
   const kf = useKwFilter()
   const allKw = useMemo(() => [...new Set(kws.map((r) => r.keyword))].sort(), [kws])
@@ -1522,6 +1545,11 @@ function OrganicRanks({ region }) {
           <select id="rk-from" value={from} onChange={(e) => setFrom(e.target.value)}>{allDates.map((d) => <option key={d}>{d}</option>)}</select></div>
         <div className="field"><label htmlFor="rk-to">To</label>
           <select id="rk-to" value={to} onChange={(e) => setTo(e.target.value)}>{allDates.map((d) => <option key={d}>{d}</option>)}</select></div>
+        <div className="field"><label>Chart grain</label>
+          <div className="tabs" role="tablist" aria-label="Chart grain">
+            {[['day', 'Daily'], ['week', 'Weekly']].map(([id, l]) => (
+              <button key={id} type="button" className={'tab' + (rgrain === id ? ' active' : '')} role="tab" aria-selected={rgrain === id} onClick={() => setRgrain(id)}>{l}</button>))}
+          </div></div>
         <span className="muted small" style={{ alignSelf: 'flex-end' }}>organic rank · lower = better</span>
       </div>
       <div className="kpis" style={{ marginBottom: 16 }}>
@@ -1547,7 +1575,7 @@ function OrganicRanks({ region }) {
             </LineChart>
           </ResponsiveContainer>
         )}
-        <div className="muted small" style={{ marginTop: 8 }}>Left axis = # keywords ranking in top 10 / top 50. Right axis = median organic rank (inverted, so up = better).</div>
+        <div className="muted small" style={{ marginTop: 8 }}>Left axis = # keywords ranking in top 10 / top 50. Right axis = median organic rank (inverted, so up = better).{rgrain === 'week' ? ' Weekly view plots each ISO week’s end-of-week snapshot.' : ''}</div>
       </div>
       <div className="card">
         <h3>Keywords · {family} <span className="muted small">({sorted.length})</span></h3>

@@ -12,6 +12,12 @@ Run: cd ~/Downloads/sqp-explorer && set -a && . .secrets/supabase.env && set +a 
 import os, re, psycopg2
 from psycopg2.extras import execute_values
 REGION = 'CA'
+# GRAIN switch: 'month' (default) → ad_targeting; 'week' → ad_targeting_week keyed by ISO Monday week-start.
+GRAIN = os.environ.get('GRAIN', 'month')
+PEXPR = "to_char(date,'YYYY-MM')" if GRAIN == 'month' else "date_trunc('week',date)::date"
+TBL   = 'ad_targeting' if GRAIN == 'month' else 'ad_targeting_week'
+PCOL  = 'month' if GRAIN == 'month' else 'week'
+PTYPE = 'text' if GRAIN == 'month' else 'date'
 clean = lambda s: re.sub(r'[\r\n\t\x00]', ' ', s).strip() if s else s
 
 def azure():
@@ -25,38 +31,38 @@ def supa():
 
 # keyword_type is max()'d (not grouped) so a (campaign,ad_group,target,match_type,month) key can't emit two
 # rows for one PK and abort the upsert page; date filtered to keep month non-null.
-SQL = """select campaign_id::bigint, coalesce(ad_group_id::text,''),
+SQL = f"""select campaign_id::bigint, coalesce(ad_group_id::text,''),
     max(coalesce(keyword_type,'')), coalesce(match_type,''), coalesce(targeting,''),
-    max(keyword_bid), to_char(date,'YYYY-MM') as month,
+    max(keyword_bid), {PEXPR} as {PCOL},
     sum(impressions)::bigint, sum(clicks)::bigint, round(sum(spend)::numeric,2),
     sum("7_day_total_orders")::bigint, round(sum("7_day_total_sales")::numeric,2)
   from ads_sponsored_products_targeting
   where campaign_id is not null and date is not null
   group by campaign_id, coalesce(ad_group_id::text,''),
-    coalesce(match_type,''), coalesce(targeting,''), to_char(date,'YYYY-MM')"""
+    coalesce(match_type,''), coalesce(targeting,''), {PEXPR}"""
 
 az = azure(); ac = az.cursor(); ac.execute(SQL)
-rows = [(REGION, 'SP', month, cid, agid, clean(ktype), clean(mtype), clean(tgt), bid, impr, clk, spend, orders, sales)
-        for cid, agid, ktype, mtype, tgt, bid, month, impr, clk, spend, orders, sales in ac.fetchall()]
+rows = [(REGION, 'SP', period, cid, agid, clean(ktype), clean(mtype), clean(tgt), bid, impr, clk, spend, orders, sales)
+        for cid, agid, ktype, mtype, tgt, bid, period, impr, clk, spend, orders, sales in ac.fetchall()]
 az.close()
-print(f"  Azure SP targeting: {len(rows):,} (campaign×ad_group×target×month) rows")
+print(f"  Azure SP targeting: {len(rows):,} (campaign×ad_group×target×{PCOL}) rows")
 
 sp = supa(); sc = sp.cursor()
-sc.execute("""create table if not exists ad_targeting (
-  region text, program text, month text, campaign_id bigint, ad_group_id text,
+sc.execute(f"""create table if not exists {TBL} (
+  region text, program text, {PCOL} {PTYPE}, campaign_id bigint, ad_group_id text,
   keyword_type text, match_type text, targeting text, keyword_bid numeric,
   impressions bigint, clicks bigint, spend numeric, orders bigint, sales numeric,
-  primary key (region, program, month, campaign_id, ad_group_id, targeting, match_type));""")
-execute_values(sc, """insert into ad_targeting
-  (region,program,month,campaign_id,ad_group_id,keyword_type,match_type,targeting,keyword_bid,
+  primary key (region, program, {PCOL}, campaign_id, ad_group_id, targeting, match_type));""")
+execute_values(sc, f"""insert into {TBL}
+  (region,program,{PCOL},campaign_id,ad_group_id,keyword_type,match_type,targeting,keyword_bid,
    impressions,clicks,spend,orders,sales) values %s
-  on conflict (region,program,month,campaign_id,ad_group_id,targeting,match_type) do update set
+  on conflict (region,program,{PCOL},campaign_id,ad_group_id,targeting,match_type) do update set
     keyword_type=excluded.keyword_type, keyword_bid=excluded.keyword_bid,
     impressions=excluded.impressions, clicks=excluded.clicks, spend=excluded.spend,
     orders=excluded.orders, sales=excluded.sales""",
   rows, page_size=5000)
 sp.commit()
-sc.execute("select min(month),max(month),count(*) from ad_targeting")
-print("  ad_targeting:", sc.fetchone())
+sc.execute(f"select min({PCOL}),max({PCOL}),count(*) from {TBL}")
+print(f"  {TBL}:", sc.fetchone())
 sp.close()
 print("✓ refresh_targeting complete (accumulator: upserted)")
