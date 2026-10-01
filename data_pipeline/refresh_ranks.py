@@ -17,7 +17,7 @@ USAGE
 ENV (loaded from ../.secrets/supabase.env):
   PGHOST PGPORT PGUSER PGPASSWORD [PGDATABASE=postgres]
 """
-import os, sys, pandas as pd, numpy as np, psycopg2
+import os, sys, time, pandas as pd, numpy as np, psycopg2
 from psycopg2.extras import execute_values
 
 CSV = os.path.expanduser(sys.argv[1] if len(sys.argv) > 1
@@ -62,12 +62,32 @@ c.commit()
 cur.execute("select count(*) from rank_daily"); before = cur.fetchone()[0]
 
 # ── 2. UPSERT into the durable accumulator (never truncate) ───────────────────
-execute_values(cur, """insert into rank_daily
+# Commit per batch: pushing all ~180k rows in one transaction over the Supabase
+# session pooler dies mid-statement with "SSL SYSCALL error: EOF detected".
+UPSERT = """insert into rank_daily
   (marketplace,project,keyword,date,ranked_asin,organic_rank,sponsored_rank,ac_badge) values %s
   on conflict (marketplace,project,keyword,date,ranked_asin) do update set
     organic_rank=excluded.organic_rank, sponsored_rank=excluded.sponsored_rank,
-    ac_badge=excluded.ac_badge""", rows, page_size=5000)
-c.commit()
+    ac_badge=excluded.ac_badge"""
+BATCH = 2000
+# The pooler also drops the socket part-way through a long run of batches
+# ("SSL SYSCALL error: EOF detected"), so reconnect and retry the batch that died.
+for i in range(0, len(rows), BATCH):
+    for attempt in range(6):
+        try:
+            execute_values(cur, UPSERT, rows[i:i + BATCH], page_size=BATCH)
+            c.commit()
+            break
+        except psycopg2.OperationalError as e:
+            if attempt == 5:
+                raise
+            print(f"  batch @{i}: {str(e).strip()} — reconnecting (attempt {attempt + 2})")
+            try:
+                c.close()
+            except Exception:
+                pass
+            time.sleep(3 * (attempt + 1))
+            c = conn(); cur = c.cursor()
 cur.execute("select count(*), min(date), max(date) from rank_daily")
 after, dmin, dmax = cur.fetchone()
 print(f"rank_daily accumulator: {before:,} → {after:,} rows (+{after-before:,})   history {dmin} … {dmax}")

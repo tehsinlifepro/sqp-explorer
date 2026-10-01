@@ -86,3 +86,38 @@ Before the first run: allowlist the Mac's public IP in **SellerLabs** (and confi
 - Keep Ranks cadence **< 30 days** (daily is set).
 - On an Ads rebuild, **preserve `campaign_map.manual_family`** (the user's manual campaign→family mappings).
 - Secrets live in `.secrets/supabase.env` (gitignored). Never commit them.
+
+---
+
+## GOTCHA (2026-08-22) — re-derive / big read-back dies over the pooler; use keepalives
+
+The `BATCH=2000` commit-per-batch loop fixed the *upsert*, but the **step-3 read-back**
+(`refresh_ranks.py:81`, `select … from rank_daily` — now ~410k rows) still gets its connection
+cut over the session pooler:
+
+```
+psycopg2.OperationalError: SSL connection has been closed unexpectedly
+psycopg2.OperationalError: server closed the connection unexpectedly
+```
+
+It fails *after* the accumulator upsert has already committed, so `rank_daily` is correct but the
+derived tables the app reads (`rank_family_day`, `rank_family_keyword`) stay stale — a silent
+half-refresh.
+
+**Fix — TCP keepalives.** `data_pipeline/run_keepalive.py` monkeypatches `psycopg2.connect` to add
+`keepalives=1, keepalives_idle=30, keepalives_interval=10, keepalives_count=5` (plus
+`statement_timeout=0`) and then runs the target script unchanged. Run either DB step through it:
+
+```
+cd ~/Downloads/sqp-explorer && set -a && . .secrets/supabase.env && set +a \
+  && export PGHOST=aws-0-us-east-1.pooler.supabase.com PGPORT=5432 PGUSER=postgres.vhrzfsceziyqbrwwwhxv \
+  && /usr/bin/python3 data_pipeline/run_keepalive.py data_pipeline/refresh_ranks.py
+```
+
+With keepalives both `refresh_ranks.py` and `build_enrich.py` complete end-to-end. Long-term the
+keepalive kwargs belong in each script's own `conn()`.
+
+**Verify, don't trust the exit code.** Both scripts are piped in the scheduled task, so a Python
+traceback can still surface as `exit code 0`. Always confirm the run printed
+`✓ ranks refresh complete` / `✓ enrichment build complete`, and sanity-check that the latest
+`rank_daily` day has a full row count (~5,963/day) rather than a partial one.
