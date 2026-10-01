@@ -33,6 +33,14 @@ $PY data_pipeline/refresh_ads.py 2>&1 | tee -a "$LOG"
 echo "--- Campaign map (dominance) ---" | tee -a "$LOG"
 $PY data_pipeline/build_campaign_map.py 2>&1 | tee -a "$LOG"
 
+# 3b. Ads + Retail WEEKLY (Sprint W2). Apply the weekly schema (tables + TACOS views), then load
+# ad_searchterm_week + ra_sales_week. Needs campaign_map (step 3) and catalog (step 1). ra weekly pulls
+# period='DAILY' bucketed to ISO Monday weeks (NOT Amazon's Sunday-start WEEKLY) so it aligns with ad weeks.
+echo "--- Ads + Retail (weekly) ---" | tee -a "$LOG"
+$PY data_pipeline/apply_sql.py data_pipeline/ad_week_schema.sql 2>&1 | tee -a "$LOG"
+GRAIN=week $PY data_pipeline/refresh_ads.py 2>&1 | tee -a "$LOG"
+GRAIN=week $PY data_pipeline/refresh_ra.py  2>&1 | tee -a "$LOG"
+
 # 4. Retail-analytics total sales (the TACOS denominator; Azure Manufacturing view). Accumulator: upserts, never truncates.
 echo "--- Retail analytics (TACOS denominator) ---" | tee -a "$LOG"
 $PY data_pipeline/refresh_ra.py 2>&1 | tee -a "$LOG"

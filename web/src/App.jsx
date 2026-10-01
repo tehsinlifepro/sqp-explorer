@@ -708,7 +708,9 @@ function FamilyExplorer({ region }) {
 
 /* ---------------- Ads (paid, by family) — Canada only ---------------- */
 function AdsExplorer() {
-  const { rows: fam, loading, error } = useRows('v_ad_family_month', { region: 'CA' })
+  const [grain, setGrain] = useState('month')
+  const { rows: famRaw, loading, error } = useRows(`v_ad_family_${grain}`, { region: 'CA' })
+  const fam = useMemo(() => grain === 'week' ? famRaw.map((r) => ({ ...r, month: r.week })) : famRaw, [famRaw, grain])
   const [prog, setProg] = useState('All')
   const months = useMemo(() => [...new Set(fam.map((r) => r.month))].sort(), [fam])
   const mr = useMonthRange(months)
@@ -731,7 +733,9 @@ function AdsExplorer() {
   const tot = scope.reduce((s, r) => ({ spend: s.spend + (r.spend || 0), sales: s.sales + (r.sales || 0), orders: s.orders + (r.orders || 0) }), { spend: 0, sales: 0, orders: 0 })
 
   // deep-dive: keyword (search-term) level for the selected family
-  const { rows: terms, loading: tl } = useRows('v_ad_term_enriched', family ? { region: 'CA', family } : { region: 'CA', family: '__none__' })
+  const { rows: termsRaw, loading: tl } = useRows(`v_ad_term_enriched_${grain}`, family ? { region: 'CA', family } : { region: 'CA', family: '__none__' })
+  const terms = useMemo(() => grain === 'week' ? termsRaw.map((r) => ({ ...r, month: r.week })) : termsRaw, [termsRaw, grain])
+  // placement / advertised-child / SD detail are monthly-only in W2 (weekly twins land in Sprint W3)
   const { rows: plc } = useRows('v_placement_family_month', { region: 'CA' })
   const { rows: adasin } = useRows('v_ad_asin_month', { region: 'CA' })
   const { rows: sd } = useRows('v_sd_month', { region: 'CA' })
@@ -794,6 +798,7 @@ function AdsExplorer() {
   return (
     <div>
       <div className="controls">
+        <GrainToggle grain={grain} setGrain={setGrain} />
         <div className="field"><label htmlFor="ad-prog">Program</label>
           <select id="ad-prog" value={prog} onChange={(e) => setProg(e.target.value)}>
             <option value="All">All programs</option><option value="SP">Sponsored Products</option><option value="SB">Sponsored Brands</option>
@@ -801,7 +806,7 @@ function AdsExplorer() {
         <div className="field"><label htmlFor="ad-fam">Family</label>
           <select id="ad-fam" value={family} onChange={(e) => setFamily(e.target.value)}>{families.map((f) => <option key={f}>{f}</option>)}</select></div>
         <MonthRange r={mr} />
-        <span className="muted small" style={{ alignSelf: 'flex-end' }}>Canada · Vendor Central ads</span>
+        <span className="muted small" style={{ alignSelf: 'flex-end' }}>Canada · Vendor Central ads{grain === 'week' && months.length ? ` · weekly from ${fmtWeek(months[0])}` : ''}</span>
       </div>
       <div className="kpis" style={{ marginBottom: 16 }}>
         <div className="kpi"><div className="v">{loading ? '…' : money(tot.spend, 'CA')}</div><div className="l">Ad spend · {family}</div></div>
@@ -813,9 +818,9 @@ function AdsExplorer() {
       <div className="card"><h3>Spend &amp; ACOS over time · {family}</h3>
         {loading ? <SkelChart /> : !series.length ? <Empty /> : (
           <ResponsiveContainer width="100%" height={240}><LineChart data={series} margin={{ left: -6 }}>
-            <CartesianGrid stroke={C.grid} strokeDasharray="3 3" /><XAxis dataKey="month" tick={axisTick} />
+            <CartesianGrid stroke={C.grid} strokeDasharray="3 3" /><XAxis dataKey="month" tick={axisTick} tickFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
             <YAxis yAxisId="s" tick={axisTick} tickFormatter={kfmt} /><YAxis yAxisId="a" orientation="right" tick={axisTick} tickFormatter={(v) => (v * 100).toFixed(0) + '%'} />
-            <Tooltip contentStyle={tipStyle} /><Legend wrapperStyle={{ fontSize: 11 }} />
+            <Tooltip contentStyle={tipStyle} labelFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} /><Legend wrapperStyle={{ fontSize: 11 }} />
             <Line yAxisId="s" dataKey="spend" stroke={C.violet} strokeWidth={2} dot={false} name="Spend" isAnimationActive={!REDUCED} />
             <Line yAxisId="a" dataKey="acos" stroke={C.warn} dot={false} name="ACOS" isAnimationActive={!REDUCED} />
           </LineChart></ResponsiveContainer>)}
@@ -880,7 +885,8 @@ function AdsExplorer() {
             </tbody></table></div>)}
         <div className="muted small" style={{ marginTop: 8 }}>Spend / Sales / Orders = ad totals over the selected months. <b>ROAS</b> = sales ÷ spend; <b>CPC</b> = spend ÷ click; <b>Halo %</b> = share of ad sales from OTHER SKUs (total − advertised-SKU), so high halo means the term sells the catalog, not just the ad. <b>SQP vol</b>, <b>Clicks L4W</b> and <b>Impr / Click / Purch %</b> are the latest-month organic &amp; market signals for that term (“-” if not in SQP / Datarova). Click any column to sort. Showing up to 400.</div>
       </div>
-      {prog !== 'SB' && (<div className="card"><h3>Placement mix · {family} <span className="muted small">where spend goes &amp; which converts (Sponsored Products)</span></h3>
+      {grain === 'week' && (<div className="card" style={{ padding: '12px 16px' }}><div className="muted small">Placement mix, children-by-CVR and Sponsored Display are <b>monthly-only</b> for now — their weekly views ship in a later sprint. Switch to Monthly to see them.</div></div>)}
+      {prog !== 'SB' && grain === 'month' && (<div className="card"><h3>Placement mix · {family} <span className="muted small">where spend goes &amp; which converts (Sponsored Products)</span></h3>
         {!plcAgg.length ? <Empty msg="No placement data for this family in range." /> : (
           <div className="table-scroll"><table>
             <thead><tr><th>Placement</th><th className="num">Spend</th><th className="num">% of spend</th><th className="num">ACOS</th><th className="num">Orders</th></tr></thead>
@@ -895,7 +901,7 @@ function AdsExplorer() {
             </tbody></table></div>)}
         <div className="muted small" style={{ marginTop: 8 }}><b>Top of Search</b> usually costs more but buys ranking — a high Top-of-Search ACOS is the price of the ranking phase. <b>Off Amazon</b> converting poorly is the first thing to trim.</div>
       </div>)}
-      {prog !== 'SB' && (<div className="card"><h3>Children by ad CVR · {family} <span className="muted small">which variation to advertise (Sponsored Products)</span></h3>
+      {prog !== 'SB' && grain === 'month' && (<div className="card"><h3>Children by ad CVR · {family} <span className="muted small">which variation to advertise (Sponsored Products)</span></h3>
         {!childAgg.length ? <Empty msg="No advertised-product data for this family in range." /> : (
           <div className="table-scroll"><table>
             <thead><tr><th>ASIN</th><th>Model</th><th className="num">Clicks</th><th className="num">Orders</th><th className="num">Ad CVR</th><th className="num">Spend</th><th className="num">Halo %</th></tr></thead>
@@ -912,7 +918,7 @@ function AdsExplorer() {
             </tbody></table></div>)}
         <div className="muted small" style={{ marginTop: 8 }}>Advertise the <b>highest-CVR child</b> — ranking gains concentrate on it. <b>Halo %</b> = share of this ASIN's ad sales that landed on OTHER SKUs; a high-halo child pulls the whole family.</div>
       </div>)}
-      <div className="card"><h3>Sponsored Display · account <span className="muted small">upper funnel — new-to-brand, DPV, ATC (selected months)</span></h3>
+      {grain === 'month' && (<div className="card"><h3>Sponsored Display · account <span className="muted small">upper funnel — new-to-brand, DPV, ATC (selected months)</span></h3>
         <div className="kpis">
           <div className="kpi"><div className="v">{money(sdAgg.spend, 'CA')}</div><div className="l">SD spend</div></div>
           <div className="kpi"><div className="v">{money(sdAgg.sales, 'CA')}</div><div className="l">SD sales</div></div>
@@ -922,27 +928,33 @@ function AdsExplorer() {
           <div className="kpi"><div className="v">{num(sdAgg.atc)}</div><div className="l">Add-to-cart</div></div>
         </div>
         <div className="muted small" style={{ marginTop: 8 }}>Sponsored Display is the brand-building / retargeting lever; a high <b>new-to-brand %</b> means it's bringing NEW customers. LifePro runs it lightly — an upper-funnel opportunity.</div>
-      </div>
+      </div>)}
     </div>
   )
 }
 
 /* ---------------- TACOS engine (total-sales efficiency + reinvest budget) — Canada only ---------------- */
 const daysInMonth = (mm) => { if (!mm) return 30; const [y, mo] = String(mm).split('-').map(Number); return new Date(y, mo, 0).getDate() }
+// current (in-progress) ISO Monday week-start as 'YYYY-MM-DD' — the weekly analogue of the current month
+const curWeekStart = () => { const x = new Date(); const day = (x.getUTCDay() + 6) % 7; x.setUTCDate(x.getUTCDate() - day); return x.toISOString().slice(0, 10) }
 function TacosExplorer() {
-  const { rows, loading, error } = useRows('v_tacos_family_month', { region: 'CA' })
+  const [grain, setGrain] = useState('month')
+  const PL = grain === 'week' ? 'weeks' : 'months'
+  const { rows: rowsRaw, loading, error } = useRows(`v_tacos_family_${grain}`, { region: 'CA' })
+  const rows = useMemo(() => grain === 'week' ? rowsRaw.map((r) => ({ ...r, month: r.week })) : rowsRaw, [rowsRaw, grain])
   const { rows: tgtRows } = useRows('targets', { region: 'CA' })
   const [ceiling, setCeiling] = useState(22)                 // % — course default; overridden by an Account TACOS target if one is set
   const cf = (Number(ceiling) || 0) / 100
-  const CUR_YM = new Date().toISOString().slice(0, 7)        // current calendar month 'YYYY-MM'
-  // "Closed" months = strictly before the current calendar month AND with retail sales loaded. Keyed off the
-  // calendar (not sales==0 per row) so a partial month-to-date row can't sneak in as a spurious TACOS spike;
-  // within a closed month we keep ALL family rows — including ads-but-no-sales — so their spend still counts.
+  // current (in-progress) period, excluded from "closed": current calendar month (monthly) or current week (weekly)
+  const CUR_P = grain === 'week' ? curWeekStart() : new Date().toISOString().slice(0, 7)
+  // "Closed" periods = strictly before the current period AND with retail sales loaded. Keyed off the calendar
+  // (not sales==0 per row) so a partial period-to-date row can't sneak in as a spurious TACOS spike; within a
+  // closed period we keep ALL family rows — including ads-but-no-sales — so their spend still counts.
   const closed = useMemo(() => {
     const salesByM = {}
-    rows.forEach((r) => { if (r.month < CUR_YM) salesByM[r.month] = (salesByM[r.month] || 0) + (r.ordered_rev || 0) })
+    rows.forEach((r) => { if (r.month < CUR_P) salesByM[r.month] = (salesByM[r.month] || 0) + (r.ordered_rev || 0) })
     return new Set(Object.entries(salesByM).filter(([, s]) => s > 0).map(([m]) => m))
-  }, [rows, CUR_YM])
+  }, [rows, CUR_P])
   const months = useMemo(() => [...closed].sort(), [closed])
   const mr = useMonthRange(months)
   const inr = useMemo(() => rows.filter((r) => closed.has(r.month) && mr.inRange(r.month)), [rows, closed, mr.from, mr.to])
@@ -953,7 +965,7 @@ function TacosExplorer() {
       .map((x) => ({ ...x, tacos: x.sales ? x.spend / x.sales : null, acos: x.ad_sales ? x.spend / x.ad_sales : null, ceiling: cf }))
   }, [inr, cf])
   const last = series[series.length - 1] || {}
-  const headroomDay = last.sales != null ? Math.max(0, (cf - (last.tacos || 0))) * last.sales / daysInMonth(last.month) : null
+  const headroomDay = last.sales != null ? Math.max(0, (cf - (last.tacos || 0))) * last.sales / (grain === 'week' ? 7 : daysInMonth(last.month)) : null
   const famTable = useMemo(() => {
     const m = {}
     inr.forEach((r) => { if (!r.family) return; const x = (m[r.family] = m[r.family] || { family: r.family, sales: 0, spend: 0, ad_sales: 0, ad_orders: 0 }); x.sales += r.ordered_rev || 0; x.spend += r.ad_spend || 0; x.ad_sales += r.ad_sales || 0; x.ad_orders += r.ad_orders || 0 })
@@ -983,40 +995,42 @@ function TacosExplorer() {
     inr.forEach((r) => { const x = (m[r.family] = m[r.family] || { sales: 0, spend: 0 }); x.sales += r.ordered_rev || 0; x.spend += r.ad_spend || 0; s += r.ordered_rev || 0; sp += r.ad_spend || 0 })
     return { byFam: m, account: { sales: s, spend: sp } }
   }, [inr])
-  const vsTarget = useMemo(() => Object.keys(tgtByScope).map((s) => {
+  // Targets are set monthly (Targets tab). In weekly mode we don't compare actuals-vs-targets (would mix grains).
+  const vsTarget = useMemo(() => grain !== 'month' ? [] : Object.keys(tgtByScope).map((s) => {
     const t = tgtByScope[s]; const a = s === 'Account' ? act.account : (act.byFam[s] || { sales: 0, spend: 0 })
     return { scope: s, salesAct: a.sales, salesTgt: t.sales_target, ppcAct: a.spend, ppcTgt: t.ppc_budget, tacos: a.sales ? a.spend / a.sales : null, tacosTgt: t.tacos_target }
-  }).sort((a, b) => b.salesAct - a.salesAct), [tgtByScope, act])
+  }).sort((a, b) => b.salesAct - a.salesAct), [tgtByScope, act, grain])
 
   if (error) return <ErrorBanner msg={error} />
   return (
     <div>
       <div className="controls">
+        <GrainToggle grain={grain} setGrain={setGrain} />
         <MonthRange r={mr} />
         <div className="field"><label htmlFor="tacos-ceil">TACOS ceiling %</label>
           <input id="tacos-ceil" type="number" min="0" max="100" step="0.5" value={ceiling}
                  onChange={(e) => { const v = e.target.value; setCeiling(v === '' ? '' : Math.max(0, Math.min(100, Number(v) || 0))) }} style={{ width: 90 }} /></div>
-        <span className="muted small" style={{ alignSelf: 'flex-end' }}>Canada · Vendor Central</span>
+        <span className="muted small" style={{ alignSelf: 'flex-end' }}>Canada · Vendor Central{grain === 'week' && months.length ? ` · weekly from ${fmtWeek(months[0])}` : ''}</span>
       </div>
       <div className="kpis" style={{ marginBottom: 16 }}>
-        <div className="kpi"><div className="v">{loading ? '…' : money(last.sales, 'CA')}</div><div className="l">Total sales · {fmtMonth(last.month) || 'latest mo'}</div></div>
+        <div className="kpi"><div className="v">{loading ? '…' : money(last.sales, 'CA')}</div><div className="l">Total sales · {fmtPeriod(grain, last.month) || `latest ${grain === 'week' ? 'wk' : 'mo'}`}</div></div>
         <div className="kpi"><div className="v">{loading ? '…' : money(last.spend, 'CA')}</div><div className="l">Ad spend</div></div>
         <div className="kpi"><div className="v">{loading ? '…' : (last.tacos != null ? pct(last.tacos) : '—')}</div><div className="l">TACOS (vs {ceiling}% ceiling)</div></div>
-        <div className="kpi"><div className="v">{loading ? '…' : (headroomDay != null ? money(headroomDay, 'CA') + '/day' : '—')}</div><div className="l">Reinvest room/day · {fmtMonth(last.month) || 'last mo'}</div></div>
+        <div className="kpi"><div className="v">{loading ? '…' : (headroomDay != null ? money(headroomDay, 'CA') + '/day' : '—')}</div><div className="l">Reinvest room/day · {fmtPeriod(grain, last.month) || `last ${grain === 'week' ? 'wk' : 'mo'}`}</div></div>
       </div>
       <div className="card"><h3>Account TACOS vs ceiling</h3>
         {loading ? <SkelChart /> : !series.length ? <Empty /> : (
           <ResponsiveContainer width="100%" height={260}><LineChart data={series} margin={{ left: -6 }}>
-            <CartesianGrid stroke={C.grid} strokeDasharray="3 3" /><XAxis dataKey="month" tick={axisTick} />
+            <CartesianGrid stroke={C.grid} strokeDasharray="3 3" /><XAxis dataKey="month" tick={axisTick} tickFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
             <YAxis tick={axisTick} tickFormatter={(v) => (v * 100).toFixed(0) + '%'} />
-            <Tooltip contentStyle={tipStyle} formatter={(v) => pct(v)} /><Legend wrapperStyle={{ fontSize: 11 }} />
+            <Tooltip contentStyle={tipStyle} formatter={(v) => pct(v)} labelFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} /><Legend wrapperStyle={{ fontSize: 11 }} />
             <ReferenceLine y={cf} stroke={C.warn} strokeDasharray="5 4" label={{ value: `ceiling ${ceiling}%`, fill: C.warn, fontSize: 11, position: 'insideTopRight' }} />
             <Line dataKey="tacos" stroke={C.line} strokeWidth={2} dot={false} name="TACOS" isAnimationActive={!REDUCED} />
             <Line dataKey="acos" stroke={C.muted} dot={false} name="ACOS" isAnimationActive={!REDUCED} />
           </LineChart></ResponsiveContainer>)}
         <div className="muted small" style={{ marginTop: 8 }}>TACOS = ad spend ÷ total ordered (retail) sales. Below the ceiling = room to spend more; above = pull back. ACOS shown for contrast (ad-sales only).</div>
       </div>
-      <div className="card"><h3>Families · TACOS &amp; reinvest headroom <span className="muted small">({fs.sorted.length}) · selected months</span></h3>
+      <div className="card"><h3>Families · TACOS &amp; reinvest headroom <span className="muted small">({fs.sorted.length}) · selected {PL}</span></h3>
         {loading ? <SkelRows n={8} /> : !fs.sorted.length ? <Empty /> : (
           <div className="table-scroll"><table>
             <thead><tr>
@@ -1037,7 +1051,7 @@ function TacosExplorer() {
                 <td className="num">{r.headroom == null ? '—' : money(r.headroom, 'CA')}</td>
               </tr>))}
             </tbody></table></div>)}
-        <div className="muted small" style={{ marginTop: 8 }}><b>Headroom</b> = (ceiling − TACOS) × sales — the extra ad budget a family can absorb over the selected months and still finish under the ceiling. Green TACOS = under ceiling (room to scale); red = over (rein in). Covers catalogued families (~96% of account sales). Margin isn't shown (retail COGS here is Amazon's cost, not LifePro's — use the Blended sheet).</div>
+        <div className="muted small" style={{ marginTop: 8 }}><b>Headroom</b> = (ceiling − TACOS) × sales — the extra ad budget a family can absorb over the selected {PL} and still finish under the ceiling. Green TACOS = under ceiling (room to scale); red = over (rein in). Covers catalogued families (~96% of account sales). Margin isn't shown (retail COGS here is Amazon's cost, not LifePro's — use the Blended sheet).</div>
       </div>
       {vsTarget.length > 0 && (<div className="card"><h3>Actuals vs targets <span className="muted small">· selected months · set in the Targets tab</span></h3>
         <div className="table-scroll"><table>
@@ -1058,6 +1072,7 @@ function TacosExplorer() {
           })}</tbody></table></div>
         <div className="muted small" style={{ marginTop: 8 }}>Sales % ≥100 = on/above target (green); PPC Used ≤100 = within budget; TACOS ≤ target = green. Targets summed over the selected months; TACOS target is the latest month's.</div>
       </div>)}
+      {grain === 'week' && (<div className="card" style={{ padding: '12px 16px' }}><div className="muted small">Sales / PPC-budget / TACOS <b>targets are set monthly</b> (Targets tab), so actuals-vs-targets shows in <b>Monthly</b> only — weekly actuals can't be compared to a monthly target without mixing grains.</div></div>)}
     </div>
   )
 }

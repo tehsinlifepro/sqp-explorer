@@ -89,6 +89,24 @@ grant select on v_query_latest, v_rank_kw_enriched, v_ad_term_enriched to authen
 c.commit()
 print("views: v_query_latest, v_rank_kw_enriched, v_ad_term_enriched ✓")
 
+# weekly twin (Sprint W2): same enrichment, period col = week. In its OWN transaction + try/except so a
+# missing v_ad_family_searchterm_week (weekly ad schema not applied yet on a fresh DB / different lane order)
+# only skips the weekly view instead of taking the monthly enriched views down with it.
+try:
+    cur.execute("""create or replace view v_ad_term_enriched_week with (security_invoker=on) as
+      select t.region, t.program, t.week, t.family, t.customer_search_term as keyword,
+             t.impressions, t.clicks, t.spend, t.sales, t.orders,
+             m.clicks_l4w, ql.search_query_volume as sqp_volume,
+             ql.our_impr_share, ql.our_click_share, ql.our_purchase_share,
+             t.units, t.adv_sku_sales, t.impr_share as tos_impr_share, t.impr_rank as tos_impr_rank
+      from v_ad_family_searchterm_week t
+      left join kw_market m  on m.region=t.region and lower(m.keyword)=lower(t.customer_search_term)
+      left join v_query_latest ql on ql.region=t.region and lower(ql.search_query)=lower(t.customer_search_term);
+    grant select on v_ad_term_enriched_week to authenticated;""")
+    c.commit(); print("view: v_ad_term_enriched_week ✓")
+except Exception as e:
+    c.rollback(); print(f"view: v_ad_term_enriched_week SKIPPED ({e}); run ad_week_schema.sql + refresh_ads GRAIN=week first")
+
 # NOTE: campaign → family AUTO mapping is NOT done here. It lives in build_campaign_map.py
 # (spend-weighted 80%-dominance rule, needs the Azure advertised-product report) and runs as part
 # of the MONTHLY Ads refresh. This script stays Azure-free so it can run daily.
