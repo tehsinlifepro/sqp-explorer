@@ -44,8 +44,8 @@ async function fetchAll(table, filters = {}) {
   return data || []
 }
 // keyword search — server-side filter/sort on query_summary (73k rows, don't fetch all)
-async function searchQueries(region, { text, category, view }) {
-  let q = supabase.from('query_summary').select('*').eq('region', region)
+async function searchQueries(region, { text, category, view }, grain = 'month') {
+  let q = supabase.from(grain === 'week' ? 'query_summary_week' : 'query_summary').select('*').eq('region', region)
   if (text) q = q.ilike('search_query', `%${text}%`)
   if (category && category !== 'All') q = q.eq('top_category', category)
   if (view === 'rising') q = q.eq('trend', 'Rising')
@@ -222,7 +222,9 @@ function Login({ onIn }) {
 
 /* ---------------- Dashboard ---------------- */
 function Dashboard({ region }) {
-  const { rows, loading, error } = useRows('category_month', { region })
+  const [grain, setGrain] = useState('month')
+  const { rows: raw, loading, error } = useRows(`category_${grain}`, { region })
+  const rows = useMemo(() => grain === 'week' ? raw.map((r) => ({ ...r, month: r.week })) : raw, [raw, grain])
   const [cat, setCat] = useState('Vibration Plate')
   const cats = useMemo(() => [...new Set(rows.map((r) => r.category))].sort(), [rows])
   useEffect(() => { if (cats.length && !cats.includes(cat)) setCat(cats[0]) }, [cats]) // eslint-disable-line
@@ -241,6 +243,7 @@ function Dashboard({ region }) {
             {cats.map((c) => <option key={c}>{c}</option>)}
           </select>
         </div>
+        <GrainToggle grain={grain} setGrain={setGrain} />
         <MonthRange r={mr} />
       </div>
       <div className="kpis" style={{ marginBottom: 16 }}>
@@ -306,8 +309,10 @@ function Dashboard({ region }) {
 
 /* ---------------- Categories (what category has what) ---------------- */
 function Categories({ region }) {
+  const [grain, setGrain] = useState('month')
   const { rows: fams, loading, error } = useRows('family_summary', { region })
-  const { rows: fnm } = useRows('family_niche_month', { region })
+  const { rows: fnmRaw } = useRows(`family_niche_${grain}`, { region })
+  const fnm = useMemo(() => grain === 'week' ? fnmRaw.map((r) => ({ ...r, month: r.week })) : fnmRaw, [fnmRaw, grain])
   const [open, setOpen] = useState(null)
   const months = useMemo(() => [...new Set(fnm.map((r) => r.month))].sort(), [fnm])
   const mr = useMonthRange(months)
@@ -327,7 +332,7 @@ function Categories({ region }) {
   const toggle = (c) => setOpen(open === c ? null : c)
   return (
     <div>
-      <div className="controls"><MonthRange r={mr} /></div>
+      <div className="controls"><GrainToggle grain={grain} setGrain={setGrain} /><MonthRange r={mr} /></div>
       <div className="card">
       <h3>Categories — what we sell where ({region})</h3>
       {error && <ErrorBanner msg={error} />}
@@ -378,10 +383,12 @@ function Categories({ region }) {
 
 /* ---------------- ASIN Explorer ---------------- */
 function AsinExplorer({ region }) {
+  const [grain, setGrain] = useState('month')
   const { rows: catalog, loading: cl, error: ce } = useRows('catalog', { region })
   const [asin, setAsin] = useState('')
   useEffect(() => { if (catalog.length && !catalog.find((c) => c.asin === asin)) setAsin(catalog[0].asin) }, [catalog]) // eslint-disable-line
-  const { rows: raw, loading: rl, error: re } = useRows('asin_month', asin ? { region, asin } : { region, asin: '__none__' })
+  const { rows: raw0, loading: rl, error: re } = useRows(`asin_${grain}`, asin ? { region, asin } : { region, asin: '__none__' })
+  const raw = useMemo(() => grain === 'week' ? raw0.map((r) => ({ ...r, month: r.week })) : raw0, [raw0, grain])
   const months = useMemo(() => [...new Set(raw.map((r) => r.month))].sort(), [raw])
   const mr = useMonthRange(months)
   const rows = useMemo(() => [...raw].filter((r) => mr.inRange(r.month)).sort((a, b) => a.month.localeCompare(b.month)), [raw, mr.from, mr.to])
@@ -399,6 +406,7 @@ function AsinExplorer({ region }) {
             {options.map((c) => <option key={c.asin} value={c.asin}>{c.asin} — {c.family} ({c.category})</option>)}
           </select>
         </div>
+        <GrainToggle grain={grain} setGrain={setGrain} />
         <MonthRange r={mr} />
       </div>
       <div className="kpis" style={{ marginBottom: 16 }}>
@@ -461,10 +469,11 @@ function Downloads({ region }) {
 /* ---------------- Keyword Explorer ---------------- */
 const trendBadge = (t) => 'badge ' + (t === 'Rising' || t === 'Emerging' ? 'up' : t === 'Declining' || t === 'Fading' ? 'down' : 'flat')
 
-function KeywordDetail({ region, q, onClose }) {
-  const { rows: months, loading: ml } = useRows('query_month', { region, search_query: q })
-  const { rows: asinRows, loading: al } = useRows('query_asin_month', { region, search_query: q })
-  const series = useMemo(() => [...months].sort((a, b) => a.month.localeCompare(b.month)), [months])
+function KeywordDetail({ region, q, grain = 'month', onClose }) {
+  const { rows: monthsRaw, loading: ml } = useRows(`query_${grain}`, { region, search_query: q })
+  const months = useMemo(() => grain === 'week' ? monthsRaw.map((r) => ({ ...r, month: r.week })) : monthsRaw, [monthsRaw, grain])
+  const { rows: asinRows, loading: al } = useRows(`query_asin_${grain}`, { region, search_query: q })
+  const series = useMemo(() => [...months].sort((a, b) => String(a.month).localeCompare(String(b.month))), [months])
   const byAsin = useMemo(() => {
     const m = {}
     for (const r of asinRows) {
@@ -515,7 +524,7 @@ function KeywordDetail({ region, q, onClose }) {
 
 function KeywordExplorer({ region }) {
   const [text, setText] = useState(''); const [debounced, setDebounced] = useState('')
-  const [category, setCategory] = useState('All'); const [view, setView] = useState('purchases')
+  const [category, setCategory] = useState('All'); const [view, setView] = useState('purchases'); const [grain, setGrain] = useState('month')
   const [cats, setCats] = useState(['All']); const [sel, setSel] = useState(null)
   const [state, setState] = useState({ rows: [], loading: true, error: null })
   useEffect(() => { const t = setTimeout(() => setDebounced(text), 300); return () => clearTimeout(t) }, [text])
@@ -523,17 +532,17 @@ function KeywordExplorer({ region }) {
     .then((d) => setCats(['All', ...[...new Set(d.map((r) => r.category))].sort()])).catch(() => {}) }, [region])
   useEffect(() => {
     let alive = true; setState((s) => ({ ...s, loading: true, error: null }))
-    searchQueries(region, { text: debounced, category, view })
+    searchQueries(region, { text: debounced, category, view }, grain)
       .then((rows) => alive && setState({ rows, loading: false, error: null }))
       .catch((e) => alive && setState({ rows: [], loading: false, error: e.message || 'Search failed' }))
     return () => { alive = false }
-  }, [region, debounced, category, view])
+  }, [region, debounced, category, view, grain])
   const VIEWS = [['purchases', 'Most purchases'], ['volume', 'Top volume'], ['rising', 'Rising'], ['emerging', 'Emerging'], ['attack', 'Attack list']]
   const { rows, loading, error } = state
   const { sorted, sort, toggle } = useSort(rows, { col: null, dir: 'desc' })
   return (
     <div>
-      {sel && <KeywordDetail region={region} q={sel} onClose={() => setSel(null)} />}
+      {sel && <KeywordDetail region={region} q={sel} grain={grain} onClose={() => setSel(null)} />}
       <div className="controls">
         <div className="field" style={{ flex: 1, minWidth: 220 }}>
           <label htmlFor="kw-search">Search keywords</label>
@@ -546,6 +555,7 @@ function KeywordExplorer({ region }) {
             {cats.map((c) => <option key={c}>{c}</option>)}
           </select>
         </div>
+        <GrainToggle grain={grain} setGrain={setGrain} />
       </div>
       <div className="tabs" role="tablist" aria-label="Keyword views" style={{ marginBottom: 14 }}>
         {VIEWS.map(([id, label]) => (
@@ -589,12 +599,15 @@ const shortKw = (k) => (k && k.length > 22 ? k.slice(0, 21) + '…' : k)
 const kfmt = (v) => (v >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : v >= 1e3 ? (v / 1e3).toFixed(0) + 'k' : v)
 
 function FamilyExplorer({ region }) {
-  const { rows: niche, loading: nl, error: ne } = useRows('family_niche_month', { region })
+  const [grain, setGrain] = useState('month')
+  const { rows: nicheRaw, loading: nl, error: ne } = useRows(`family_niche_${grain}`, { region })
+  const niche = useMemo(() => grain === 'week' ? nicheRaw.map((r) => ({ ...r, month: r.week })) : nicheRaw, [nicheRaw, grain])
   const families = useMemo(() => [...new Set(niche.map((r) => r.family))].sort(), [niche])
   const [family, setFamily] = useState('')
   useEffect(() => { if (families.length && !families.includes(family)) setFamily(families[0]) }, [families]) // eslint-disable-line
-  const { rows: comp, loading: cl } = useRows('family_kw_composition', family ? { region, family } : { region, family: '__none__' })
-  const { rows: tk, loading: tl } = useRows('family_top_keywords', family ? { region, family } : { region, family: '__none__' })
+  const { rows: compRaw, loading: cl } = useRows(grain === 'week' ? 'family_kw_composition_week' : 'family_kw_composition', family ? { region, family } : { region, family: '__none__' })
+  const comp = useMemo(() => grain === 'week' ? compRaw.map((r) => ({ ...r, month: r.week })) : compRaw, [compRaw, grain])
+  const { rows: tk, loading: tl } = useRows(grain === 'week' ? 'family_top_keywords_week' : 'family_top_keywords', family ? { region, family } : { region, family: '__none__' })
   const months = useMemo(() => [...new Set(niche.filter((r) => r.family === family).map((r) => r.month))].sort(), [niche, family])
   const mr = useMonthRange(months)
   const series = useMemo(() => niche.filter((r) => r.family === family && mr.inRange(r.month)).sort((a, b) => a.month.localeCompare(b.month)), [niche, family, mr.from, mr.to])
@@ -621,6 +634,7 @@ function FamilyExplorer({ region }) {
             {families.map((f) => <option key={f}>{f}</option>)}
           </select>
         </div>
+        <GrainToggle grain={grain} setGrain={setGrain} />
         <MonthRange r={mr} />
       </div>
       <div className="kpis" style={{ marginBottom: 16 }}>
