@@ -164,13 +164,18 @@ function useMonthRange(months) {
   const inRange = (m) => (!from || m >= from) && (!to || m <= to)
   return { from, setFrom, to, setTo, inRange, months }
 }
-const MonthRange = ({ r }) => (
-  <>
-    <div className="field"><label>From month</label>
-      <select value={r.from} onChange={(e) => r.setFrom(e.target.value)}>{r.months.map((m) => <option key={m}>{m}</option>)}</select></div>
-    <div className="field"><label>To month</label>
-      <select value={r.to} onChange={(e) => r.setTo(e.target.value)}>{r.months.map((m) => <option key={m}>{m}</option>)}</select></div>
-  </>)
+// grain-aware: weekly shows "Wk of Sep 14" labels (raw week-start value preserved); monthly is unchanged.
+const MonthRange = ({ r, grain }) => {
+  const fmt = (k) => (grain === 'week' ? fmtWeek(k) : k)
+  const noun = grain === 'week' ? 'week' : 'month'
+  return (
+    <>
+      <div className="field"><label>From {noun}</label>
+        <select value={r.from} onChange={(e) => r.setFrom(e.target.value)}>{r.months.map((m) => <option key={m} value={m}>{fmt(m)}</option>)}</select></div>
+      <div className="field"><label>To {noun}</label>
+        <select value={r.to} onChange={(e) => r.setTo(e.target.value)}>{r.months.map((m) => <option key={m} value={m}>{fmt(m)}</option>)}</select></div>
+    </>)
+}
 const maxN = (a, b) => (b == null ? a : a == null ? b : Math.max(a, b))  // max ignoring null
 // grain (Monthly/Weekly): usePeriodRange is the grain-agnostic range hook (keys are opaque sortable strings)
 const usePeriodRange = useMonthRange
@@ -244,7 +249,7 @@ function Dashboard({ region }) {
           </select>
         </div>
         <GrainToggle grain={grain} setGrain={setGrain} />
-        <MonthRange r={mr} />
+        <MonthRange r={mr} grain={grain} />
       </div>
       <div className="kpis" style={{ marginBottom: 16 }}>
         <div className="kpi"><div className="v">{loading ? '…' : pct(last.our_purchase_share)}</div><div className="l">Our purchase share (latest)</div></div>
@@ -258,7 +263,7 @@ function Dashboard({ region }) {
           <ResponsiveContainer width="100%" height={260}>
             <LineChart data={series} margin={{ left: -10 }}>
               <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
-              <XAxis dataKey="month" tick={axisTick} />
+              <XAxis dataKey="month" tick={axisTick} tickFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
               <YAxis tickFormatter={(v) => (v * 100).toFixed(0) + '%'} tick={axisTick} />
               <Tooltip formatter={(v) => pct(v)} contentStyle={tipStyle} />
               <Line type="monotone" dataKey="our_purchase_share" stroke={C.line} strokeWidth={2}
@@ -274,7 +279,7 @@ function Dashboard({ region }) {
             <ResponsiveContainer width="100%" height={230}>
               <LineChart data={series} margin={{ left: -10 }}>
                 <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
-                <XAxis dataKey="month" tick={axisTick} />
+                <XAxis dataKey="month" tick={axisTick} tickFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
                 <YAxis tickFormatter={(v) => (v * 100).toFixed(0) + '%'} tick={axisTick} />
                 <Tooltip formatter={(v) => pct(v)} contentStyle={tipStyle} />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
@@ -292,7 +297,7 @@ function Dashboard({ region }) {
             <ResponsiveContainer width="100%" height={230}>
               <LineChart data={series} margin={{ left: -10 }}>
                 <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
-                <XAxis dataKey="month" tick={axisTick} />
+                <XAxis dataKey="month" tick={axisTick} tickFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
                 <YAxis tick={axisTick} />
                 <Tooltip contentStyle={tipStyle} />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
@@ -332,7 +337,7 @@ function Categories({ region }) {
   const toggle = (c) => setOpen(open === c ? null : c)
   return (
     <div>
-      <div className="controls"><GrainToggle grain={grain} setGrain={setGrain} /><MonthRange r={mr} /></div>
+      <div className="controls"><GrainToggle grain={grain} setGrain={setGrain} /><MonthRange r={mr} grain={grain} /></div>
       <div className="card">
       <h3>Categories — what we sell where ({region})</h3>
       {error && <ErrorBanner msg={error} />}
@@ -407,7 +412,7 @@ function AsinExplorer({ region }) {
           </select>
         </div>
         <GrainToggle grain={grain} setGrain={setGrain} />
-        <MonthRange r={mr} />
+        <MonthRange r={mr} grain={grain} />
       </div>
       <div className="kpis" style={{ marginBottom: 16 }}>
         <div className="kpi"><div className="v">{rl ? '…' : num(total)}</div><div className="l">Purchases (range, core)</div></div>
@@ -421,7 +426,7 @@ function AsinExplorer({ region }) {
           <ResponsiveContainer width="100%" height={260}>
             <LineChart data={rows} margin={{ left: -10 }}>
               <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
-              <XAxis dataKey="month" tick={axisTick} />
+              <XAxis dataKey="month" tick={axisTick} tickFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
               <YAxis tick={axisTick} />
               <Tooltip contentStyle={tipStyle} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
@@ -459,6 +464,10 @@ function Downloads({ region }) {
           <div className="muted small" style={{ marginTop: 6 }}>region · asin · category · family · month · impressions/clicks/cart_adds/purchases</div></div>
         <div><Btn table="category_month" name="category_level_monthly" label="Category-level monthly" primary />
           <div className="muted small" style={{ marginTop: 6 }}>market + our funnel shares + prices per category per month</div></div>
+        <div><Btn table="asin_week" name="asin_level_weekly" label="ASIN-level weekly" />
+          <div className="muted small" style={{ marginTop: 6 }}>same columns, ISO (Mon-start) week grain · ~14 weeks</div></div>
+        <div><Btn table="category_week" name="category_level_weekly" label="Category-level weekly" />
+          <div className="muted small" style={{ marginTop: 6 }}>category funnel per ISO week · ~14 weeks</div></div>
         <div><Btn table="family_summary" name="family_summary" label="Family summary (12mo)" /></div>
         <div><Btn table="catalog" name="catalog" label="Catalog (ASIN → category map)" /></div>
       </div>
@@ -495,7 +504,7 @@ function KeywordDetail({ region, q, grain = 'month', onClose }) {
             <ResponsiveContainer width="100%" height={220}>
               <LineChart data={series} margin={{ left: -6 }}>
                 <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
-                <XAxis dataKey="month" tick={axisTick} />
+                <XAxis dataKey="month" tick={axisTick} tickFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
                 <YAxis yAxisId="v" tick={axisTick} tickFormatter={(v) => v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v} />
                 <YAxis yAxisId="s" orientation="right" tick={axisTick} tickFormatter={(v) => (v * 100).toFixed(0) + '%'} />
                 <Tooltip contentStyle={tipStyle} />
@@ -635,7 +644,7 @@ function FamilyExplorer({ region }) {
           </select>
         </div>
         <GrainToggle grain={grain} setGrain={setGrain} />
-        <MonthRange r={mr} />
+        <MonthRange r={mr} grain={grain} />
       </div>
       <div className="kpis" style={{ marginBottom: 16 }}>
         <div className="kpi"><div className="v">{nl ? '…' : kfmt(last.niche_volume)}</div><div className="l">Niche size (searches/mo)</div></div>
@@ -649,7 +658,7 @@ function FamilyExplorer({ region }) {
           <ResponsiveContainer width="100%" height={300}>
             <AreaChart data={stack} margin={{ left: -4 }}>
               <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
-              <XAxis dataKey="month" tick={axisTick} />
+              <XAxis dataKey="month" tick={axisTick} tickFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
               <YAxis tick={axisTick} tickFormatter={kfmt} />
               <Tooltip contentStyle={tipStyle} formatter={(v, n) => [num(v), n]} />
               <Legend wrapperStyle={{ fontSize: 10 }} formatter={shortKw} />
@@ -670,7 +679,7 @@ function FamilyExplorer({ region }) {
           <ResponsiveContainer width="100%" height={240}>
             <LineChart data={series} margin={{ left: -10 }}>
               <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
-              <XAxis dataKey="month" tick={axisTick} />
+              <XAxis dataKey="month" tick={axisTick} tickFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
               <YAxis tick={axisTick} tickFormatter={(v) => (v * 100).toFixed(1) + '%'} />
               <Tooltip contentStyle={tipStyle} formatter={(v) => pct(v)} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
@@ -808,7 +817,7 @@ function AdsExplorer() {
           </select></div>
         <div className="field"><label htmlFor="ad-fam">Family</label>
           <select id="ad-fam" value={family} onChange={(e) => setFamily(e.target.value)}>{families.map((f) => <option key={f}>{f}</option>)}</select></div>
-        <MonthRange r={mr} />
+        <MonthRange r={mr} grain={grain} />
         <span className="muted small" style={{ alignSelf: 'flex-end' }}>Canada · Vendor Central ads{grain === 'week' && months.length ? ` · weekly from ${fmtWeek(months[0])}` : ''}</span>
       </div>
       <div className="kpis" style={{ marginBottom: 16 }}>
@@ -1008,7 +1017,7 @@ function TacosExplorer() {
     <div>
       <div className="controls">
         <GrainToggle grain={grain} setGrain={setGrain} />
-        <MonthRange r={mr} />
+        <MonthRange r={mr} grain={grain} />
         <div className="field"><label htmlFor="tacos-ceil">TACOS ceiling %</label>
           <input id="tacos-ceil" type="number" min="0" max="100" step="0.5" value={ceiling}
                  onChange={(e) => { const v = e.target.value; setCeiling(v === '' ? '' : Math.max(0, Math.min(100, Number(v) || 0))) }} style={{ width: 90 }} /></div>
@@ -1111,7 +1120,7 @@ function OptimizeExplorer() {
     <div>
       <div className="controls">
         <GrainToggle grain={grain} setGrain={setGrain} />
-        <MonthRange r={mr} />
+        <MonthRange r={mr} grain={grain} />
         <span className="muted small" style={{ alignSelf: 'flex-end' }}>Canada · Sponsored Products{grain === 'week' && months.length ? ` · weekly from ${fmtWeek(months[0])}` : ''}</span>
       </div>
       <div className="kpis" style={{ marginBottom: 16 }}>
@@ -1311,7 +1320,7 @@ function RecommendationsExplorer() {
         <GrainToggle grain={grain} setGrain={setGrain} />
         <div className="field"><label htmlFor="rec-fam">Family</label>
           <select id="rec-fam" value={familyF} onChange={(e) => setFamilyF(e.target.value)}>{families.map((f) => <option key={f}>{f}</option>)}</select></div>
-        <MonthRange r={mr} />
+        <MonthRange r={mr} grain={grain} />
         <span className="muted small" style={{ alignSelf: 'flex-end' }}>Canada · rule-based (no AI guessing)</span>
       </div>
       <div className="kpis" style={{ marginBottom: 16 }}>
