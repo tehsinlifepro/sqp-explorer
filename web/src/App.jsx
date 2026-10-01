@@ -226,7 +226,46 @@ function Login({ onIn }) {
 }
 
 /* ---------------- Dashboard ---------------- */
-function Dashboard({ region }) {
+// "What do I do next" strip for the Dashboard — top paid opportunities + account TACOS vs target.
+// Reuses the shared useRecs engine (CA-only paid data); clicking a row jumps to the Recommendations tab.
+function ActionStrip({ onNav }) {
+  const { all: recs, accountTacos, loading } = useRecs('month')
+  const { rows: tgtRows } = useRows('targets', { region: 'CA' })
+  const tacTgt = useMemo(() => {
+    const a = [...tgtRows].filter((r) => r.scope === 'Account' && r.tacos_target != null).sort((x, y) => x.month.localeCompare(y.month)).pop()
+    return a ? a.tacos_target : 0.22
+  }, [tgtRows])
+  const TL = Object.fromEntries(REC_TYPES.map(([k, v]) => [k, v]))
+  const top = useMemo(() => [...recs].sort((a, b) => (b.impact || 0) - (a.impact || 0)).slice(0, 3), [recs])
+  const atStake = useMemo(() => recs.reduce((s, r) => s + (r.impact || 0), 0), [recs])
+  if (loading && !recs.length) return null                      // don't flash an empty strip on first paint
+  const overCeil = accountTacos != null && accountTacos > tacTgt
+  return (
+    <div className="card" style={{ marginBottom: 16, borderColor: 'var(--cyan)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <h3 style={{ margin: 0 }}>Act now <span className="muted small">· Canada · top paid opportunities</span></h3>
+        <button className="primary small" onClick={() => onNav && onNav('rec')}>See all recommendations →</button>
+      </div>
+      <div className="kpis" style={{ marginTop: 12 }}>
+        <div className="kpi"><div className="v"><span className={'badge ' + (accountTacos == null ? 'flat' : overCeil ? 'down' : 'up')}>{accountTacos != null ? pct(accountTacos) : '—'}</span></div><div className="l">Account TACOS vs {Math.round(tacTgt * 1000) / 10}% target</div></div>
+        <div className="kpi"><div className="v">{num(recs.length)}</div><div className="l">Open recommendations</div></div>
+        <div className="kpi"><div className="v">{money(atStake, 'CA')}</div><div className="l">C$ at stake</div></div>
+      </div>
+      {top.length > 0 && (
+        <div className="table-scroll" style={{ marginTop: 8 }}><table>
+          <thead><tr><th>Do next</th><th>Why</th><th className="num">C$ at stake</th></tr></thead>
+          <tbody>{top.map((r, i) => (
+            <tr key={i} className="rowbtn" onClick={() => onNav && onNav('rec')} title="Open Recommendations">
+              <td><span className={recBadge(r.type)} style={{ marginRight: 8 }}>{TL[r.type] || r.type}</span><b>{r.action}</b></td>
+              <td className="muted small">{r.reason}</td>
+              <td className="num">{money(r.impact, 'CA')}</td>
+            </tr>))}
+          </tbody></table></div>)}
+    </div>
+  )
+}
+
+function Dashboard({ region, onNav }) {
   const [grain, setGrain] = useState('month')
   const { rows: raw, loading, error } = useRows(`category_${grain}`, { region })
   const rows = useMemo(() => grain === 'week' ? raw.map((r) => ({ ...r, month: r.week })) : raw, [raw, grain])
@@ -241,6 +280,7 @@ function Dashboard({ region }) {
   if (error) return <ErrorBanner msg={error} />
   return (
     <div>
+      <ActionStrip onNav={onNav} />
       <div className="controls">
         <div className="field">
           <label htmlFor="dash-cat">Category</label>
@@ -1184,9 +1224,10 @@ function OptimizeExplorer() {
 /* ---------------- Recommendations (action + reason, SellerMate-style) — Canada only ---------------- */
 const REC_TYPES = [['all', 'All'], ['cut', 'Cut waste'], ['bid', 'Bid'], ['harvest', 'Harvest'], ['recover', 'Recover'], ['reinvest', 'Reinvest'], ['placement', 'Placement'], ['variation', 'Variation']]
 const recBadge = (t) => 'badge ' + (t === 'cut' ? 'down' : t === 'reinvest' || t === 'harvest' ? 'up' : 'flat')
-function RecommendationsExplorer() {
+// Shared recommendation engine — used by the Recommendations tab AND the Dashboard action strip.
+// Returns the full reasoned rec list (+ account ACoS benchmark, account TACOS, the range hook) for `grain`.
+function useRecs(grain) {
   const CUT_MIN = 50, HARVEST_MIN = 5, RECOVER_MIN = 100, CEIL = 0.22, REINVEST_MIN = 500, PLC_GAP = 0.03, PLC_MIN = 200, VAR_MINCLK = 20, VAR_GAP = 0.02
-  const [grain, setGrain] = useState('month')
   // monthly targeting view has no _month suffix; the others follow v_X_${grain}. Harvest + rank are lifetime.
   const { rows: tgtRaw, loading: l1 } = useRows(grain === 'week' ? 'v_targeting_enriched_week' : 'v_targeting_enriched', { region: 'CA' })
   const tgt = useMemo(() => grain === 'week' ? tgtRaw.map((r) => ({ ...r, month: r.week })) : tgtRaw, [tgtRaw, grain])
@@ -1199,7 +1240,6 @@ function RecommendationsExplorer() {
   const { rows: adasinRaw, loading: l6 } = useRows(`v_ad_asin_${grain}`, { region: 'CA' })
   const adasin = useMemo(() => grain === 'week' ? adasinRaw.map((r) => ({ ...r, month: r.week })) : adasinRaw, [adasinRaw, grain])
   const loading = l1 || l2 || l3 || l4 || l5 || l6
-  const [typeF, setTypeF] = useState('all'); const [familyF, setFamilyF] = useState('All')
   const months = useMemo(() => [...new Set(tgt.map((r) => r.month))].sort(), [tgt])
   const mr = useMonthRange(months)
   // default to recent performance — last 3 months, or last 8 weeks — not 18-month sums
@@ -1211,6 +1251,10 @@ function RecommendationsExplorer() {
     let sp = 0, sa = 0; tgt.filter((r) => mr.inRange(r.month)).forEach((r) => { sp += r.spend || 0; sa += r.sales || 0 }); return sa ? sp / sa : null
   }, [tgt, mr.from, mr.to])
   const benchPct = accBench != null ? (accBench * 100).toFixed(0) + '%' : 'n/a'
+  // account TACOS over the range (ad spend ÷ total ordered revenue) — for the Dashboard strip tile
+  const accountTacos = useMemo(() => {
+    let sp = 0, sa = 0; tac.filter((r) => mr.inRange(r.month)).forEach((r) => { sp += r.ad_spend || 0; sa += r.ordered_rev || 0 }); return sa ? sp / sa : null
+  }, [tac, mr.from, mr.to])
 
   const cuts = useMemo(() => {
     const m = {}
@@ -1308,6 +1352,13 @@ function RecommendationsExplorer() {
   }, [adasin, mr.from, mr.to])
 
   const all = useMemo(() => [...cuts, ...bids, ...harvests, ...recovers, ...reinvests, ...placements, ...variations], [cuts, bids, harvests, recovers, reinvests, placements, variations])
+  return { all, benchPct, accBench, loading, mr, months, accountTacos }
+}
+
+function RecommendationsExplorer() {
+  const [grain, setGrain] = useState('month')
+  const { all, benchPct, loading, mr } = useRecs(grain)
+  const [typeF, setTypeF] = useState('all'); const [familyF, setFamilyF] = useState('All')
   const families = useMemo(() => ['All', ...[...new Set(all.map((r) => r.family))].filter((f) => f && f !== '—').sort()], [all])
   const shown = useMemo(() => all.filter((r) => (typeF === 'all' || r.type === typeF) && (familyF === 'All' || r.family === familyF)), [all, typeF, familyF])
   const { sorted, sort, toggle } = useSort(shown, { col: 'impact', dir: 'desc' })
@@ -1741,7 +1792,16 @@ export default function App() {
   }, [authed])
   if (!ready) return <div className="app"><SkelRows n={4} /></div>
   if (!authed) return <Login onIn={() => setAuthed(true)} />
-  const TABS = [['dash', 'Dashboard'], ['keyword', 'Keyword Explorer'], ['family', 'Family Explorer'], ['ranks', 'Organic Ranks'], ['ads', 'Ads'], ['tacos', 'TACOS'], ['opt', 'Optimize'], ['rec', 'Recommendations'], ['map', 'Campaign Map'], ['cats', 'Categories'], ['asin', 'ASIN Explorer'], ['catalog', 'Catalog'], ['tgts', 'Targets'], ['dl', 'Downloads']]
+  // grouped nav (Sprint 10): Overview / Market & Organic / Paid / Setup. Recommendations leads the Paid group.
+  const NAV_GROUPS = [
+    ['Overview', [['dash', 'Dashboard']]],
+    ['Market & Organic', [['keyword', 'Keyword Explorer'], ['family', 'Family Explorer'], ['cats', 'Categories'], ['asin', 'ASIN Explorer'], ['ranks', 'Organic Ranks']]],
+    ['Paid', [['rec', 'Recommendations'], ['ads', 'Ads'], ['tacos', 'TACOS'], ['opt', 'Optimize'], ['tgts', 'Targets'], ['map', 'Campaign Map']]],
+    ['Setup', [['catalog', 'Catalog'], ['dl', 'Downloads']]],
+  ]
+  // paid tabs are CA-only (Reason = Canada Vendor Central); the Market selector doesn't apply there.
+  const CA_ONLY_TABS = ['ads', 'tacos', 'opt', 'rec', 'map', 'tgts']
+  const caOnly = CA_ONLY_TABS.includes(tab)
   const SI = (d) => <svg viewBox="0 0 24 24"><path d={d} /></svg>
   const ICONS = {
     dash: <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg>,
@@ -1764,22 +1824,28 @@ export default function App() {
       <aside className="side">
         <div className="logo">SQP<b>·</b>Explorer</div>
         <nav className="snav" role="tablist" aria-label="Views">
-          {TABS.map(([id, label]) => (
-            <button key={id} className={'slink' + (tab === id ? ' on' : '')} role="tab"
-                    aria-selected={tab === id} onClick={() => setTab(id)}>{ICONS[id]}<span>{label}</span></button>
+          {NAV_GROUPS.map(([title, items]) => (
+            <div key={title}>
+              <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '.08em', opacity: .5, padding: '12px 12px 4px', fontWeight: 600 }}>{title}</div>
+              {items.map(([id, label]) => (
+                <button key={id} className={'slink' + (tab === id ? ' on' : '')} role="tab"
+                        aria-selected={tab === id} onClick={() => setTab(id)}>{ICONS[id]}<span>{label}</span></button>
+              ))}
+            </div>
           ))}
         </nav>
         <div className="side-foot">
           <div className="field"><label htmlFor="region-sel">Market</label>
-            <select id="region-sel" value={region} onChange={(e) => setRegion(e.target.value)}>
+            <select id="region-sel" value={caOnly ? 'CA' : region} onChange={(e) => setRegion(e.target.value)} disabled={caOnly}>
               {REGIONS.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
             </select>
+            {caOnly && <div className="muted small" style={{ marginTop: 4 }}>Paid tabs are CA-only</div>}
           </div>
           <button className="ghost" onClick={() => supabase.auth.signOut()}>Sign out</button>
         </div>
       </aside>
       <main className="main">
-        {tab === 'dash' && <Dashboard region={region} />}
+        {tab === 'dash' && <Dashboard region={region} onNav={setTab} />}
         {tab === 'keyword' && <KeywordExplorer region={region} />}
         {tab === 'family' && <FamilyExplorer region={region} />}
         {tab === 'ranks' && <OrganicRanks region={region} />}
