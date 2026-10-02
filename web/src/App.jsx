@@ -110,10 +110,16 @@ function useSort(rows, initial) {
   const toggle = (col) => setSort((s) => (s.col === col ? { col, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { col, dir: 'desc' }))
   return { sorted, sort, toggle }
 }
-const Th = ({ col, sort, toggle, children, num, ...p }) => (
-  <th {...p} className={(num ? 'num ' : '') + 'sortable'} onClick={() => toggle(col)}
+// title falls back to the shared metric explanation (MT, defined below) keyed by column — consistent hover tooltips everywhere
+const Th = ({ col, sort, toggle, children, num, title, ...p }) => (
+  <th {...p} title={title ?? MT[col]} className={(num ? 'num ' : '') + 'sortable'} onClick={() => toggle(col)}
       aria-sort={sort.col === col ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
     {children}<span className="sortcaret">{sort.col === col ? (sort.dir === 'asc' ? '▲' : '▼') : ''}</span></th>)
+
+// Row-cap indicator: makes a silent `.slice(0, cap)` truncation visible ("top N of M") instead of a flat "up to N".
+const Cap = ({ n, cap }) => (n > cap
+  ? <span style={{ color: 'var(--warn)' }}> Showing top {num(cap)} of {num(n)} — narrow the filter to see the rest.</span>
+  : <> {num(n)} shown.</>)
 
 /* ---------- Google-Sheets-style keyword filter: contains + multi-select ---------- */
 function useKwFilter() {
@@ -186,6 +192,19 @@ const GrainToggle = ({ grain, setGrain }) => (
         <button key={id} type="button" className={'tab' + (grain === id ? ' active' : '')} role="tab"
                 aria-selected={grain === id} onClick={() => setGrain(id)}>{l}</button>))}
     </div></div>)
+// per-tab freshness chip — the latest period present in THIS tab's data (paid/retail can lag SQP)
+const Fresh = ({ period, grain }) => (period
+  ? <span className="badge flat" title="Latest period present in this tab's data" style={{ alignSelf: 'flex-end' }}>data through {grain ? fmtPeriod(grain, period) : period}</span>
+  : null)
+// shared metric explanations — hover tooltips on column headers so a metric's meaning is always one hover away
+const MT = {
+  acos: 'ACOS = ad spend ÷ ad sales (ad efficiency only).',
+  tacos: 'TACOS = ad spend ÷ TOTAL ordered (retail) revenue — the scaling lever.',
+  roas: 'ROAS = ad sales ÷ ad spend (higher is better).',
+  cpc: 'CPC = ad spend ÷ click.',
+  halo: 'Halo % = share of ad sales from OTHER SKUs (total − advertised-SKU); high = the term sells the catalog, not just the ad.',
+  headroom: 'Headroom = (ceiling − TACOS) × sales — extra ad budget absorbable while staying under the ceiling.',
+}
 
 /* ---------------- Login gate (the "code" = shared account password) ---------------- */
 function Login({ onIn }) {
@@ -289,7 +308,7 @@ function Dashboard({ region, onNav }) {
           </select>
         </div>
         <GrainToggle grain={grain} setGrain={setGrain} />
-        <MonthRange r={mr} grain={grain} />
+        <MonthRange r={mr} grain={grain} /><Fresh period={mr.months[mr.months.length - 1]} grain={grain} />
       </div>
       <div className="kpis" style={{ marginBottom: 16 }}>
         <div className="kpi"><div className="v">{loading ? '…' : pct(last.our_purchase_share)}</div><div className="l">Our purchase share (latest)</div></div>
@@ -305,7 +324,7 @@ function Dashboard({ region, onNav }) {
               <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
               <XAxis dataKey="month" tick={axisTick} tickFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
               <YAxis tickFormatter={(v) => (v * 100).toFixed(0) + '%'} tick={axisTick} />
-              <Tooltip formatter={(v) => pct(v)} contentStyle={tipStyle} />
+              <Tooltip formatter={(v) => pct(v)} contentStyle={tipStyle} labelFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
               <Line type="monotone" dataKey="our_purchase_share" stroke={C.line} strokeWidth={2}
                     dot={false} name="Purchase share" isAnimationActive={!REDUCED} />
             </LineChart>
@@ -321,7 +340,7 @@ function Dashboard({ region, onNav }) {
                 <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
                 <XAxis dataKey="month" tick={axisTick} tickFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
                 <YAxis tickFormatter={(v) => (v * 100).toFixed(0) + '%'} tick={axisTick} />
-                <Tooltip formatter={(v) => pct(v)} contentStyle={tipStyle} />
+                <Tooltip formatter={(v) => pct(v)} contentStyle={tipStyle} labelFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
                 <Line dataKey="our_impr_share" stroke={C.muted} dot={false} name="Impr" isAnimationActive={!REDUCED} />
                 <Line dataKey="our_click_share" stroke={C.line} dot={false} name="Click" isAnimationActive={!REDUCED} />
@@ -339,7 +358,7 @@ function Dashboard({ region, onNav }) {
                 <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
                 <XAxis dataKey="month" tick={axisTick} tickFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
                 <YAxis tick={axisTick} />
-                <Tooltip contentStyle={tipStyle} />
+                <Tooltip contentStyle={tipStyle} labelFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
                 <Line dataKey="niche_median_price" stroke={C.muted} dot={false} name="Niche" isAnimationActive={!REDUCED} />
                 <Line dataKey="our_median_price" stroke={C.line} strokeWidth={2} dot={false} name="Ours" isAnimationActive={!REDUCED} />
@@ -377,7 +396,7 @@ function Categories({ region }) {
   const toggle = (c) => setOpen(open === c ? null : c)
   return (
     <div>
-      <div className="controls"><GrainToggle grain={grain} setGrain={setGrain} /><MonthRange r={mr} grain={grain} /></div>
+      <div className="controls"><GrainToggle grain={grain} setGrain={setGrain} /><MonthRange r={mr} grain={grain} /><Fresh period={mr.months[mr.months.length - 1]} grain={grain} /></div>
       <div className="card">
       <h3>Categories — what we sell where ({region})</h3>
       {error && <ErrorBanner msg={error} />}
@@ -452,7 +471,7 @@ function AsinExplorer({ region }) {
           </select>
         </div>
         <GrainToggle grain={grain} setGrain={setGrain} />
-        <MonthRange r={mr} grain={grain} />
+        <MonthRange r={mr} grain={grain} /><Fresh period={mr.months[mr.months.length - 1]} grain={grain} />
       </div>
       <div className="kpis" style={{ marginBottom: 16 }}>
         <div className="kpi"><div className="v">{rl ? '…' : num(total)}</div><div className="l">Purchases (range, core)</div></div>
@@ -468,7 +487,7 @@ function AsinExplorer({ region }) {
               <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
               <XAxis dataKey="month" tick={axisTick} tickFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
               <YAxis tick={axisTick} />
-              <Tooltip contentStyle={tipStyle} />
+              <Tooltip contentStyle={tipStyle} labelFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
               <Line dataKey="purchases" stroke={C.green} strokeWidth={2} dot={false} name="Purchases (core)" isAnimationActive={!REDUCED} />
               <Line dataKey="clicks" stroke={C.line} dot={false} name="Clicks" isAnimationActive={!REDUCED} />
@@ -547,7 +566,7 @@ function KeywordDetail({ region, q, grain = 'month', onClose }) {
                 <XAxis dataKey="month" tick={axisTick} tickFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
                 <YAxis yAxisId="v" tick={axisTick} tickFormatter={(v) => v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v} />
                 <YAxis yAxisId="s" orientation="right" tick={axisTick} tickFormatter={(v) => (v * 100).toFixed(0) + '%'} />
-                <Tooltip contentStyle={tipStyle} />
+                <Tooltip contentStyle={tipStyle} labelFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
                 <Line yAxisId="v" dataKey="search_query_volume" stroke={C.violet} dot={false} name="Volume" isAnimationActive={!REDUCED} />
                 <Line yAxisId="s" dataKey="our_purchase_share" stroke={C.neon || C.green} strokeWidth={2} dot={false} name="Our share" isAnimationActive={!REDUCED} />
@@ -684,7 +703,7 @@ function FamilyExplorer({ region }) {
           </select>
         </div>
         <GrainToggle grain={grain} setGrain={setGrain} />
-        <MonthRange r={mr} grain={grain} />
+        <MonthRange r={mr} grain={grain} /><Fresh period={mr.months[mr.months.length - 1]} grain={grain} />
       </div>
       <div className="kpis" style={{ marginBottom: 16 }}>
         <div className="kpi"><div className="v">{nl ? '…' : kfmt(last.niche_volume)}</div><div className="l">Niche size (searches/mo)</div></div>
@@ -700,7 +719,7 @@ function FamilyExplorer({ region }) {
               <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
               <XAxis dataKey="month" tick={axisTick} tickFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
               <YAxis tick={axisTick} tickFormatter={kfmt} />
-              <Tooltip contentStyle={tipStyle} formatter={(v, n) => [num(v), n]} />
+              <Tooltip contentStyle={tipStyle} formatter={(v, n) => [num(v), n]} labelFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
               <Legend wrapperStyle={{ fontSize: 10 }} formatter={shortKw} />
               {keywords.map((k, i) => (
                 <Area key={k} type="monotone" dataKey={k} stackId="1" name={k}
@@ -721,7 +740,7 @@ function FamilyExplorer({ region }) {
               <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
               <XAxis dataKey="month" tick={axisTick} tickFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
               <YAxis tick={axisTick} tickFormatter={(v) => (v * 100).toFixed(1) + '%'} />
-              <Tooltip contentStyle={tipStyle} formatter={(v) => pct(v)} />
+              <Tooltip contentStyle={tipStyle} formatter={(v) => pct(v)} labelFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
               <Line dataKey="our_niche_purchase_share" stroke={C.neon || C.green} strokeWidth={2} dot={false} name="Our purchase share" isAnimationActive={!REDUCED} />
               <Line dataKey="our_niche_impr_share" stroke={C.muted} dot={false} name="Our impression share" isAnimationActive={!REDUCED} />
@@ -857,7 +876,7 @@ function AdsExplorer() {
           </select></div>
         <div className="field"><label htmlFor="ad-fam">Family</label>
           <select id="ad-fam" value={family} onChange={(e) => setFamily(e.target.value)}>{families.map((f) => <option key={f}>{f}</option>)}</select></div>
-        <MonthRange r={mr} grain={grain} />
+        <MonthRange r={mr} grain={grain} /><Fresh period={mr.months[mr.months.length - 1]} grain={grain} />
         <span className="muted small" style={{ alignSelf: 'flex-end' }}>Canada · Vendor Central ads{grain === 'week' && months.length ? ` · weekly from ${fmtWeek(months[0])}` : ''}</span>
       </div>
       <div className="kpis" style={{ marginBottom: 16 }}>
@@ -935,7 +954,7 @@ function AdsExplorer() {
                 <td className="num">{r.purch_share == null ? '-' : pct(r.purch_share)}</td>
               </tr>))}
             </tbody></table></div>)}
-        <div className="muted small" style={{ marginTop: 8 }}>Spend / Sales / Orders = ad totals over the selected months. <b>ROAS</b> = sales ÷ spend; <b>CPC</b> = spend ÷ click; <b>Halo %</b> = share of ad sales from OTHER SKUs (total − advertised-SKU), so high halo means the term sells the catalog, not just the ad. <b>SQP vol</b>, <b>Clicks L4W</b> and <b>Impr / Click / Purch %</b> are the latest-month organic &amp; market signals for that term (“-” if not in SQP / Datarova). Click any column to sort. Showing up to 400.</div>
+        <div className="muted small" style={{ marginTop: 8 }}>Spend / Sales / Orders = ad totals over the selected months. <b>ROAS</b> = sales ÷ spend; <b>CPC</b> = spend ÷ click; <b>Halo %</b> = share of ad sales from OTHER SKUs (total − advertised-SKU), so high halo means the term sells the catalog, not just the ad. <b>SQP vol</b>, <b>Clicks L4W</b> and <b>Impr / Click / Purch %</b> are the latest-month organic &amp; market signals for that term (“-” if not in SQP / Datarova). Click any column to sort.<Cap n={kwSorted.length} cap={400} /></div>
       </div>
       {prog !== 'SB' && (<div className="card"><h3>Placement mix · {family} <span className="muted small">where spend goes &amp; which converts (Sponsored Products)</span></h3>
         {!plcAgg.length ? <Empty msg="No placement data for this family in range." /> : (
@@ -1057,7 +1076,7 @@ function TacosExplorer() {
     <div>
       <div className="controls">
         <GrainToggle grain={grain} setGrain={setGrain} />
-        <MonthRange r={mr} grain={grain} />
+        <MonthRange r={mr} grain={grain} /><Fresh period={mr.months[mr.months.length - 1]} grain={grain} />
         <div className="field"><label htmlFor="tacos-ceil">TACOS ceiling %</label>
           <input id="tacos-ceil" type="number" min="0" max="100" step="0.5" value={ceiling}
                  onChange={(e) => { const v = e.target.value; setCeiling(v === '' ? '' : Math.max(0, Math.min(100, Number(v) || 0))) }} style={{ width: 90 }} /></div>
@@ -1160,7 +1179,7 @@ function OptimizeExplorer() {
     <div>
       <div className="controls">
         <GrainToggle grain={grain} setGrain={setGrain} />
-        <MonthRange r={mr} grain={grain} />
+        <MonthRange r={mr} grain={grain} /><Fresh period={mr.months[mr.months.length - 1]} grain={grain} />
         <span className="muted small" style={{ alignSelf: 'flex-end' }}>Canada · Sponsored Products{grain === 'week' && months.length ? ` · weekly from ${fmtWeek(months[0])}` : ''}</span>
       </div>
       <div className="kpis" style={{ marginBottom: 16 }}>
@@ -1192,7 +1211,7 @@ function OptimizeExplorer() {
                 <td className="num muted">{r.bid == null ? '—' : money(r.bid, 'CA')}</td>
               </tr>))}
             </tbody></table></div>)}
-        <div className="muted small" style={{ marginTop: 8 }}>Spend with <b>0 orders</b> over the selected {PL} — negate the search term or drop the target. “Auto” = auto/predefined targeting. Showing up to 400.</div>
+        <div className="muted small" style={{ marginTop: 8 }}>Spend with <b>0 orders</b> over the selected {PL} — negate the search term or drop the target. “Auto” = auto/predefined targeting.<Cap n={wS.sorted.length} cap={400} /></div>
       </div>
       <div className="card"><h3>Harvest — converting terms not yet exact <span className="muted small">({hS.sorted.length})</span></h3>
         {hl ? <SkelRows n={10} /> : !hS.sorted.length ? <Empty /> : (
@@ -1215,7 +1234,7 @@ function OptimizeExplorer() {
                 <td className="num"><span className={'badge ' + (r.acos > 0.25 ? 'down' : r.acos ? 'up' : 'flat')}>{r.acos ? (r.acos * 100).toFixed(0) + '%' : '—'}</span></td>
               </tr>))}
             </tbody></table></div>)}
-        <div className="muted small" style={{ marginTop: 8 }}>SP search terms that <b>convert</b> (≥1 order, all-time) but aren’t yet an <b>exact</b> target — promote to an exact campaign / Top-of-Search. Brand terms and ASIN targets (e.g. “b0…”) appear here too; sort/scan by family. Showing up to 400.</div>
+        <div className="muted small" style={{ marginTop: 8 }}>SP search terms that <b>convert</b> (≥1 order, all-time) but aren’t yet an <b>exact</b> target — promote to an exact campaign / Top-of-Search. Brand terms and ASIN targets (e.g. “b0…”) appear here too; sort/scan by family.<Cap n={hS.sorted.length} cap={400} /></div>
       </div>
     </div>
   )
@@ -1223,6 +1242,9 @@ function OptimizeExplorer() {
 
 /* ---------------- Recommendations (action + reason, SellerMate-style) — Canada only ---------------- */
 const REC_TYPES = [['all', 'All'], ['cut', 'Cut waste'], ['bid', 'Bid'], ['harvest', 'Harvest'], ['recover', 'Recover'], ['reinvest', 'Reinvest'], ['placement', 'Placement'], ['variation', 'Variation']]
+// where you act on each rec type — clicking a row jumps to that tab
+const REC_TAB = { cut: 'opt', bid: 'opt', harvest: 'opt', recover: 'ranks', reinvest: 'tacos', placement: 'ads', variation: 'ads' }
+const REC_TAB_LABEL = { opt: 'Optimize', ranks: 'Organic Ranks', tacos: 'TACOS', ads: 'Ads' }
 const recBadge = (t) => 'badge ' + (t === 'cut' ? 'down' : t === 'reinvest' || t === 'harvest' ? 'up' : 'flat')
 // Shared recommendation engine — used by the Recommendations tab AND the Dashboard action strip.
 // Returns the full reasoned rec list (+ account ACoS benchmark, account TACOS, the range hook) for `grain`.
@@ -1355,7 +1377,7 @@ function useRecs(grain) {
   return { all, benchPct, accBench, loading, mr, months, accountTacos }
 }
 
-function RecommendationsExplorer() {
+function RecommendationsExplorer({ onNav }) {
   const [grain, setGrain] = useState('month')
   const { all, benchPct, loading, mr } = useRecs(grain)
   const [typeF, setTypeF] = useState('all'); const [familyF, setFamilyF] = useState('All')
@@ -1371,7 +1393,7 @@ function RecommendationsExplorer() {
         <GrainToggle grain={grain} setGrain={setGrain} />
         <div className="field"><label htmlFor="rec-fam">Family</label>
           <select id="rec-fam" value={familyF} onChange={(e) => setFamilyF(e.target.value)}>{families.map((f) => <option key={f}>{f}</option>)}</select></div>
-        <MonthRange r={mr} grain={grain} />
+        <MonthRange r={mr} grain={grain} /><Fresh period={mr.months[mr.months.length - 1]} grain={grain} />
         <span className="muted small" style={{ alignSelf: 'flex-end' }}>Canada · rule-based (no AI guessing)</span>
       </div>
       <div className="kpis" style={{ marginBottom: 16 }}>
@@ -1394,17 +1416,20 @@ function RecommendationsExplorer() {
               <Th col="action" sort={sort} toggle={toggle}>Recommendation</Th>
               <Th col="reason" sort={sort} toggle={toggle}>Reason</Th>
               <Th col="impact" sort={sort} toggle={toggle} num>C$ at stake</Th>
+              <th aria-label="Act in">Act in</th>
             </tr></thead>
             <tbody>{sorted.slice(0, 500).map((r, i) => (
-              <tr key={i}>
+              <tr key={i} className="rowbtn" onClick={() => onNav && onNav(REC_TAB[r.type])}
+                  title={onNav ? `Open ${REC_TAB_LABEL[REC_TAB[r.type]] || 'the'} tab to act on this` : undefined}>
                 <td><span className={recBadge(r.type)}>{tLabel[r.type]}</span></td>
                 <td className="small muted">{r.family}</td>
                 <td><b>{r.action}</b></td>
                 <td className="muted small">{r.reason}</td>
                 <td className="num">{money(r.impact, 'CA')}</td>
+                <td className="small" style={{ whiteSpace: 'nowrap', color: 'var(--cyan)' }}>{REC_TAB_LABEL[REC_TAB[r.type]]} →</td>
               </tr>))}
             </tbody></table></div>)}
-        <div className="muted small" style={{ marginTop: 8 }}>Every recommendation is derived from your own data (rule-based — no AI guessing), each reason benchmarked against your account ACoS. <b>C$ at stake</b> = spend saved (Cut/Recover), over-benchmark spend or absorbable headroom (Bid), sales in play (Harvest), headroom to deploy (Reinvest), est. savings (Placement), or reallocatable spend (Variation). <b>Harvest &amp; Recover use lifetime data</b>; the selected {grain === 'week' ? 'week' : 'month'} range drives the other types. Canada · Sponsored Products. Showing up to 500.</div>
+        <div className="muted small" style={{ marginTop: 8 }}>Every recommendation is derived from your own data (rule-based — no AI guessing), each reason benchmarked against your account ACoS. <b>C$ at stake</b> = spend saved (Cut/Recover), over-benchmark spend or absorbable headroom (Bid), sales in play (Harvest), headroom to deploy (Reinvest), est. savings (Placement), or reallocatable spend (Variation). <b>Harvest &amp; Recover use lifetime data</b>; the selected {grain === 'week' ? 'week' : 'month'} range drives the other types. <b>Click a row</b> to open the tab where you act on it. Canada · Sponsored Products.<Cap n={sorted.length} cap={500} /></div>
       </div>
     </div>
   )
@@ -1561,7 +1586,7 @@ function CampaignMapping() {
                   </td>
                 </tr>)
             })}</tbody></table></div>)}
-        <div className="muted small" style={{ marginTop: 10 }}>Edits save instantly and the Ads views re-aggregate live. <b>Brand Level</b> = umbrella / brand campaigns that shouldn’t roll into one family (pick it for any campaign, e.g. “[Brand] All Products”). {needCount} need mapping · {brandCount} brand-level. Click a header to sort. Showing up to 300.</div>
+        <div className="muted small" style={{ marginTop: 10 }}>Edits save instantly and the Ads views re-aggregate live. <b>Brand Level</b> = umbrella / brand campaigns that shouldn’t roll into one family (pick it for any campaign, e.g. “[Brand] All Products”). {needCount} need mapping · {brandCount} brand-level. Click a header to sort.<Cap n={sorted.length} cap={300} /></div>
       </div>
     </div>
   )
@@ -1627,7 +1652,7 @@ function OrganicRanks({ region }) {
               <XAxis dataKey="date" tick={axisTick} minTickGap={28} tickFormatter={(d) => d.slice(5)} />
               <YAxis yAxisId="c" tick={axisTick} />
               <YAxis yAxisId="m" orientation="right" tick={axisTick} reversed />
-              <Tooltip contentStyle={tipStyle} />
+              <Tooltip contentStyle={tipStyle} labelFormatter={rgrain === 'week' ? (k) => fmtWeek(k) : undefined} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
               <Line yAxisId="c" dataKey="kw_top10" stroke={C.line} strokeWidth={2} dot={false} name="In top 10" isAnimationActive={!REDUCED} />
               <Line yAxisId="c" dataKey="kw_top50" stroke={C.violet} dot={false} name="In top 50" isAnimationActive={!REDUCED} />
@@ -1671,7 +1696,7 @@ function OrganicRanks({ region }) {
                 <td><span className={rankBadge(r.trend)}>{r.trend}</span></td>
               </tr>))}
             </tbody></table></div>)}
-        <div className="muted small" style={{ marginTop: 8 }}>“Now” = latest organic position (lower is better); blank = not ranked. <b>SQP vol/mo</b> = latest-month search volume (“-” if not in SQP). <b>Clicks L4W</b> = market keyword clicks last 4 weeks (Datarova). <b>Ad $</b> = ad spend on this term (all-time in the ad window, CA); <b>Recover</b> flags terms ranked top-10 organically that still take ad spend — pull back and let organic carry. Click any column header to sort. Showing up to 400.</div>
+        <div className="muted small" style={{ marginTop: 8 }}>“Now” = latest organic position (lower is better); blank = not ranked. <b>SQP vol/mo</b> = latest-month search volume (“-” if not in SQP). <b>Clicks L4W</b> = market keyword clicks last 4 weeks (Datarova). <b>Ad $</b> = ad spend on this term (all-time in the ad window, CA); <b>Recover</b> flags terms ranked top-10 organically that still take ad spend — pull back and let organic carry. Click any column header to sort.<Cap n={sorted.length} cap={400} /></div>
       </div>
     </div>
   )
@@ -1765,7 +1790,7 @@ function CatalogTab() {
                 <td><button className="ghost small" title="remove" onClick={() => delRow(r)}>✕</button></td>
               </tr>))}
             </tbody></table></div>)}
-        <div className="muted small" style={{ marginTop: 10 }}>Edits save when you leave a cell. Family / Category accept an existing value (dropdown) or a new one you type. New ASINs flow into Family, Categories, ASIN Explorer and auto-map ad campaigns on the next refresh. Showing up to 500.</div>
+        <div className="muted small" style={{ marginTop: 10 }}>Edits save when you leave a cell. Family / Category accept an existing value (dropdown) or a new one you type. New ASINs flow into Family, Categories, ASIN Explorer and auto-map ad campaigns on the next refresh.<Cap n={sorted.length} cap={500} /></div>
       </div>
     </div>
   )
@@ -1852,7 +1877,7 @@ export default function App() {
         {tab === 'ads' && <AdsExplorer />}
         {tab === 'tacos' && <TacosExplorer />}
         {tab === 'opt' && <OptimizeExplorer />}
-        {tab === 'rec' && <RecommendationsExplorer />}
+        {tab === 'rec' && <RecommendationsExplorer onNav={setTab} />}
         {tab === 'map' && <CampaignMapping />}
         {tab === 'cats' && <Categories region={region} />}
         {tab === 'asin' && <AsinExplorer region={region} />}
