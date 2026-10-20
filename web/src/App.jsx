@@ -178,12 +178,15 @@ function useMonthRange(months) {
 const MonthRange = ({ r, grain }) => {
   const fmt = (k) => (grain === 'week' ? fmtWeek(k) : k)
   const noun = grain === 'week' ? 'week' : 'month'
+  // guard against a null/undefined period slipping in for one render during a grain/table switch
+  // (before useRows clears stale rows) — a null key triggers React's "unique key" warning
+  const opts = r.months.filter((m) => m != null)
   return (
     <>
       <div className="field"><label>From {noun}</label>
-        <select value={r.from} onChange={(e) => r.setFrom(e.target.value)}>{r.months.map((m) => <option key={m} value={m}>{fmt(m)}</option>)}</select></div>
+        <select value={r.from} onChange={(e) => r.setFrom(e.target.value)}>{opts.map((m) => <option key={m} value={m}>{fmt(m)}</option>)}</select></div>
       <div className="field"><label>To {noun}</label>
-        <select value={r.to} onChange={(e) => r.setTo(e.target.value)}>{r.months.map((m) => <option key={m} value={m}>{fmt(m)}</option>)}</select></div>
+        <select value={r.to} onChange={(e) => r.setTo(e.target.value)}>{opts.map((m) => <option key={m} value={m}>{fmt(m)}</option>)}</select></div>
     </>)
 }
 const maxN = (a, b) => (b == null ? a : a == null ? b : Math.max(a, b))  // max ignoring null

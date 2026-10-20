@@ -123,3 +123,21 @@ keepalive kwargs belong in each script's own `conn()`.
 traceback can still surface as `exit code 0`. Always confirm the run printed
 `✓ ranks refresh complete` / `✓ enrichment build complete`, and sanity-check that the latest
 `rank_daily` day has a full row count (~5,963/day) rather than a partial one.
+
+---
+
+## Local UI dev & debugging (the web app)
+
+Run it: `cd web && npm run dev` (Vite; needs Homebrew node@24 on PATH — `/opt/homebrew/opt/node@24/bin`).
+`web/.env.local` points at the **production** Supabase, so **localhost serves live data** — ideal for
+reproducing prod bugs. Login is a single **access code** field (email baked in via `VITE_VIEWER_EMAIL`);
+when automating the browser, **type** the code (don't set the field value programmatically, or React's
+onChange never fires and auth 401s).
+
+**GOTCHA — `useRows` must clear rows on a table/filter switch (fixed 2026-10-20).** Toggling a tab to
+Weekly blanked the screen (`TypeError … reading 'localeCompare'`): `useRows` had kept the previous
+table's rows while re-fetching, so the `week→month` alias ran over stale monthly rows (no `week` col) →
+`month=undefined` → the `.sort(a.month.localeCompare(...))` threw. Fix: `useRows` sets `rows:[]` on key
+change (never serves a wrong-shaped row set mid-fetch). **QA rule: click every Monthly/Weekly toggle on
+each tab in a real browser + watch the console — this class of bug only shows at render time, not in a
+build or code read.**
