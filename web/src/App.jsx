@@ -63,7 +63,11 @@ function useRows(table, filters) {
   const key = JSON.stringify([table, filters])
   const [s, setS] = useState({ rows: [], loading: true, error: null })
   useEffect(() => {
-    let alive = true; setS((p) => ({ ...p, loading: true, error: null }))
+    // Clear rows (not just set loading) when the table/filters change: keeping the previous table's rows
+    // during a re-fetch leaks a wrong-shaped row set into consumers — e.g. toggling grain re-points the
+    // view (family_niche_month -> _week) while the OLD rows (no `week` col) are still present, so the
+    // week->month alias yields month=undefined and a downstream `.sort(a.month.localeCompare)` crashes.
+    let alive = true; setS({ rows: [], loading: true, error: null })
     fetchAll(table, filters)
       .then((rows) => alive && setS({ rows, loading: false, error: null }))
       .catch((e) => alive && setS({ rows: [], loading: false, error: e.message || 'Failed to load data' }))
