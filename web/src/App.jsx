@@ -1248,15 +1248,19 @@ function OptimizeExplorer() {
 }
 
 /* ---------------- Recommendations (action + reason, SellerMate-style) — Canada only ---------------- */
-const REC_TYPES = [['all', 'All'], ['cut', 'Cut waste'], ['bid', 'Bid'], ['harvest', 'Harvest'], ['recover', 'Recover'], ['reinvest', 'Reinvest'], ['placement', 'Placement'], ['variation', 'Variation']]
+const REC_TYPES = [['all', 'All'], ['cut', 'Cut waste'], ['bid', 'Bid'], ['harvest', 'Harvest'], ['recover', 'Recover'], ['reinvest', 'Reinvest'], ['trim', 'Trim budget'], ['placement', 'Placement'], ['variation', 'Variation']]
 // where you act on each rec type — clicking a row jumps to that tab
-const REC_TAB = { cut: 'opt', bid: 'opt', harvest: 'opt', recover: 'ranks', reinvest: 'tacos', placement: 'ads', variation: 'ads' }
+const REC_TAB = { cut: 'opt', bid: 'opt', harvest: 'opt', recover: 'ranks', reinvest: 'tacos', trim: 'tacos', placement: 'ads', variation: 'ads' }
 const REC_TAB_LABEL = { opt: 'Optimize', ranks: 'Organic Ranks', tacos: 'TACOS', ads: 'Ads' }
-const recBadge = (t) => 'badge ' + (t === 'cut' ? 'down' : t === 'reinvest' || t === 'harvest' ? 'up' : 'flat')
+const recBadge = (t) => 'badge ' + (t === 'cut' || t === 'trim' ? 'down' : t === 'reinvest' || t === 'harvest' ? 'up' : 'flat')
 // Shared recommendation engine — used by the Recommendations tab AND the Dashboard action strip.
 // Returns the full reasoned rec list (+ account ACoS benchmark, account TACOS, the range hook) for `grain`.
 function useRecs(grain) {
-  const CUT_MIN = 50, HARVEST_MIN = 5, RECOVER_MIN = 100, CEIL = 0.22, REINVEST_MIN = 500, PLC_GAP = 0.03, PLC_MIN = 200, VAR_MINCLK = 20, VAR_GAP = 0.02
+  // Thresholds from the SQP-Research playbook (2026-10-21, CA data — ~/Downloads/SQP-Research/paper.md):
+  // cut at 20 clicks/0 orders (K1), bid rebuild at ≥2× account ACoS (B3), maintenance pull-back only at organic rank 1–3 (K5),
+  // TACOS tiers scale <6% / hold 6–12% / trim ≥12% in ±15% steps (F1–F3), stop raising Top of Search above 65% of spend (P2).
+  const CUT_CLK = 20, HARVEST_MIN = 5, RECOVER_RANK = 3, RECOVER_MIN = 100, TAC_SCALE = 0.06, TAC_TRIM = 0.12, TAC_STEP = 0.15, TAC_MIN = 300,
+    REBUILD = 2, PLC_GAP = 0.03, PLC_MIN = 200, TOS_SHIFT = 0.6, TOS_CAP = 0.65, VAR_MINCLK = 20, VAR_GAP = 0.02
   // monthly targeting view has no _month suffix; the others follow v_X_${grain}. Harvest + rank are lifetime.
   const { rows: tgtRaw, loading: l1 } = useRows(grain === 'week' ? 'v_targeting_enriched_week' : 'v_targeting_enriched', { region: 'CA' })
   const tgt = useMemo(() => grain === 'week' ? tgtRaw.map((r) => ({ ...r, month: r.week })) : tgtRaw, [tgtRaw, grain])
@@ -1292,10 +1296,10 @@ function useRecs(grain) {
       const x = (m[k] = m[k] || { family: r.family, campaign: r.campaign_name, targeting: r.targeting, match: r.match_type, spend: 0, clicks: 0, orders: 0 })
       x.spend += r.spend || 0; x.clicks += r.clicks || 0; x.orders += r.orders || 0
     })
-    return Object.values(m).filter((x) => x.orders === 0 && x.spend >= CUT_MIN).map((x) => ({
+    return Object.values(m).filter((x) => x.orders === 0 && x.clicks >= CUT_CLK).map((x) => ({
       type: 'cut', family: x.family || '—', impact: x.spend,
       action: `Negate “${x.targeting}” (${mtLabel(x.match)})${x.campaign ? ` in ${x.campaign}` : ''}`,
-      reason: `${money(x.spend, 'CA')} spent · ${num(x.clicks)} clicks · 0 orders (account ACoS ${benchPct})` }))
+      reason: `${num(x.clicks)} clicks · 0 orders · ${money(x.spend, 'CA')} spent — terms past ${CUT_CLK} clicks with no order keep running ~2× account ACoS (${benchPct})` }))
   }, [tgt, mr.from, mr.to, benchPct])
 
   // Bid optimization: efficient targets (ACoS well below account) → scale up; inefficient (well above) → trim
@@ -1315,10 +1319,14 @@ function useRecs(grain) {
         out.push({ type: 'bid', family: x.family || '—', impact: Math.max(0, accBench * x.sales - x.spend),   // absorbable headroom at benchmark
           action: `Increase bid on “${x.targeting}” (${mtLabel(x.match)})${now}`,
           reason: `ACoS ${(acos * 100).toFixed(0)}% vs account ${benchPct} · efficient — room to scale` })
+      else if (acos >= accBench * REBUILD && x.spend >= 50)
+        out.push({ type: 'bid', family: x.family || '—', impact: Math.max(0, (acos - accBench) * x.sales),     // spend above benchmark
+          action: `Cut bid 25% or pause & rebuild “${x.targeting}” (${mtLabel(x.match)})${now}`,
+          reason: `ACoS ${(acos * 100).toFixed(0)}% vs account ${benchPct} · ≥${REBUILD}× — only ~1 in 8 such targets recover on their own` })
       else if (acos > accBench * 1.5 && x.spend >= 50)
         out.push({ type: 'bid', family: x.family || '—', impact: Math.max(0, (acos - accBench) * x.sales),     // spend above benchmark
           action: `Decrease bid on “${x.targeting}” (${mtLabel(x.match)})${now}`,
-          reason: `ACoS ${(acos * 100).toFixed(0)}% vs account ${benchPct} · inefficient — trim bid` })
+          reason: `ACoS ${(acos * 100).toFixed(0)}% vs account ${benchPct} · inefficient — trim bid 10–20%` })
     })
     return out
   }, [tgt, mr.from, mr.to, accBench, benchPct])
@@ -1330,20 +1338,27 @@ function useRecs(grain) {
       reason: `${num(h.orders)} orders · ${money(h.sales, 'CA')} sales${acos != null ? ` · ACoS ${(acos * 100).toFixed(0)}% vs account ${benchPct}` : ''} · not yet exact` }
   }), [harvest, benchPct])
 
-  const recovers = useMemo(() => rankkw.filter((r) => r.latest_rank != null && r.latest_rank <= 10 && (r.ad_spend || 0) >= RECOVER_MIN).map((r) => ({
-    type: 'recover', family: r.family || '—', impact: r.ad_spend || 0,
-    action: `Pull back ads on “${r.keyword}”`,
-    reason: `ranks #${r.latest_rank} organically · still ${money(r.ad_spend, 'CA')} in ads` })), [rankkw])
+  const recovers = useMemo(() => rankkw.filter((r) => r.latest_rank != null && r.latest_rank <= RECOVER_RANK && (r.ad_spend || 0) >= RECOVER_MIN).map((r) => ({
+    type: 'recover', family: r.family || '—', impact: 0.5 * (r.ad_spend || 0),   // spend saved by halving
+    action: `Cut ads ≥50% on “${r.keyword}”`,
+    reason: `ranks #${r.latest_rank} organically · still ${money(r.ad_spend, 'CA')} in ads · rank 1–3 terms held the top 10 after ads were halved — restore if rank slips to 8+` })), [rankkw])
 
-  const reinvests = useMemo(() => {
+  // TACOS tiers: marginal total ROAS of extra spend ≈ 4.9× below 6% TACOS, 3.5× at 6–12%, 2.6× above 12% (long-run, CA)
+  const { reinvests, trims } = useMemo(() => {
     const m = {}
     tac.filter((r) => mr.inRange(r.month) && r.ordered_rev > 0).forEach((r) => {
       const x = (m[r.family] = m[r.family] || { family: r.family, sales: 0, spend: 0 }); x.sales += r.ordered_rev || 0; x.spend += r.ad_spend || 0 })
-    return Object.values(m).map((x) => { const t = x.sales ? x.spend / x.sales : null; return { family: x.family, t, head: t != null ? Math.max(0, (CEIL - t)) * x.sales : 0 } })
-      .filter((x) => x.family && x.t != null && x.head >= REINVEST_MIN).map((x) => ({
-        type: 'reinvest', family: x.family, impact: x.head,
-        action: `Increase budget on ${x.family}`,
-        reason: `TACOS ${(x.t * 100).toFixed(1)}% vs ${(CEIL * 100).toFixed(0)}% ceiling · ${money(x.head, 'CA')} room` }))
+    const fam = Object.values(m).map((x) => ({ ...x, t: x.sales ? x.spend / x.sales : null })).filter((x) => x.family && x.t != null && x.spend >= TAC_MIN)
+    return {
+      reinvests: fam.filter((x) => x.t < TAC_SCALE).map((x) => ({
+        type: 'reinvest', family: x.family, impact: TAC_STEP * x.spend,   // budget step to deploy
+        action: `Increase budget +${TAC_STEP * 100}% on ${x.family}`,
+        reason: `TACOS ${(x.t * 100).toFixed(1)}% < ${TAC_SCALE * 100}% · extra spend here returns ~4.9× in total sales` })),
+      trims: fam.filter((x) => x.t >= TAC_TRIM).map((x) => ({
+        type: 'trim', family: x.family, impact: TAC_STEP * x.spend,       // spend saved by one step
+        action: `Cut budget −${TAC_STEP * 100}% on ${x.family}`,
+        reason: `TACOS ${(x.t * 100).toFixed(1)}% ≥ ${TAC_TRIM * 100}% · extra spend here returns only ~2.6× — fix waste/bids first` })),
+    }
   }, [tac, mr.from, mr.to])
 
   const placements = useMemo(() => {
@@ -1353,11 +1368,18 @@ function useRecs(grain) {
       const isTOS = (r.placement_type || '').startsWith('Top of Search'); x.spend += r.spend || 0
       if (isTOS) { x.tosSpend += r.spend || 0; x.tosSales += r.sales || 0 } else { x.othSpend += r.spend || 0; x.othSales += r.sales || 0 }
     })
-    return Object.values(m).map((x) => ({ ...x, tos: x.tosSales ? x.tosSpend / x.tosSales : null, oth: x.othSales ? x.othSpend / x.othSales : null, share: x.spend ? x.tosSpend / x.spend : 0 }))
-      .filter((x) => x.family && x.tos != null && x.oth != null && x.tos + PLC_GAP < x.oth && x.share < 0.6 && x.spend >= PLC_MIN).map((x) => ({
-        type: 'placement', family: x.family, impact: Math.max(0, (x.oth - x.tos) * x.othSales),   // est. savings if non-TOS ran at TOS efficiency
-        action: `Shift budget toward Top of Search for ${x.family}`,
-        reason: `Top-of-Search ACoS ${(x.tos * 100).toFixed(0)}% vs ${(x.oth * 100).toFixed(0)}% elsewhere · TOS only ${(x.share * 100).toFixed(0)}% of spend` }))
+    const fam = Object.values(m).map((x) => ({ ...x, tos: x.tosSales ? x.tosSpend / x.tosSales : null, oth: x.othSales ? x.othSpend / x.othSales : null, share: x.spend ? x.tosSpend / x.spend : 0 }))
+      .filter((x) => x.family && x.spend >= PLC_MIN)
+    const shift = fam.filter((x) => x.tos != null && x.oth != null && x.tos + PLC_GAP < x.oth && x.share < TOS_SHIFT).map((x) => ({
+      type: 'placement', family: x.family, impact: Math.max(0, (x.oth - x.tos) * x.othSales),   // est. savings if non-TOS ran at TOS efficiency
+      action: `Shift budget toward Top of Search for ${x.family}`,
+      reason: `Top-of-Search ACoS ${(x.tos * 100).toFixed(0)}% vs ${(x.oth * 100).toFixed(0)}% elsewhere · TOS only ${(x.share * 100).toFixed(0)}% of spend` }))
+    // above ~65% TOS share, family ACoS climbs fast (≈11% → 16% at 65–80% → 34% above 80%)
+    const cap = fam.filter((x) => x.share > TOS_CAP).map((x) => ({
+      type: 'placement', family: x.family, impact: (x.share - TOS_CAP) * x.spend,   // TOS spend above the cap
+      action: `Stop raising Top of Search for ${x.family} — trim the TOS modifier one step`,
+      reason: `TOS is ${(x.share * 100).toFixed(0)}% of spend (> ${TOS_CAP * 100}%)${x.tos != null ? ` · TOS ACoS ${(x.tos * 100).toFixed(0)}%` : ''} · past 65% family ACoS rises sharply` }))
+    return [...shift, ...cap]
   }, [plc, mr.from, mr.to])
 
   const variations = useMemo(() => {
@@ -1380,7 +1402,7 @@ function useRecs(grain) {
     return out
   }, [adasin, mr.from, mr.to])
 
-  const all = useMemo(() => [...cuts, ...bids, ...harvests, ...recovers, ...reinvests, ...placements, ...variations], [cuts, bids, harvests, recovers, reinvests, placements, variations])
+  const all = useMemo(() => [...cuts, ...bids, ...harvests, ...recovers, ...reinvests, ...trims, ...placements, ...variations], [cuts, bids, harvests, recovers, reinvests, trims, placements, variations])
   return { all, benchPct, accBench, loading, mr, months, accountTacos }
 }
 
@@ -1436,7 +1458,7 @@ function RecommendationsExplorer({ onNav }) {
                 <td className="small" style={{ whiteSpace: 'nowrap', color: 'var(--cyan)' }}>{REC_TAB_LABEL[REC_TAB[r.type]]} →</td>
               </tr>))}
             </tbody></table></div>)}
-        <div className="muted small" style={{ marginTop: 8 }}>Every recommendation is derived from your own data (rule-based — no AI guessing), each reason benchmarked against your account ACoS. <b>C$ at stake</b> = spend saved (Cut/Recover), over-benchmark spend or absorbable headroom (Bid), sales in play (Harvest), headroom to deploy (Reinvest), est. savings (Placement), or reallocatable spend (Variation). <b>Harvest &amp; Recover use lifetime data</b>; the selected {grain === 'week' ? 'week' : 'month'} range drives the other types. <b>Click a row</b> to open the tab where you act on it. Canada · Sponsored Products.<Cap n={sorted.length} cap={500} /></div>
+        <div className="muted small" style={{ marginTop: 8 }}>Every recommendation is derived from your own data (rule-based — no AI guessing), each reason benchmarked against your account ACoS. <b>C$ at stake</b> = spend saved (Cut/Recover), over-benchmark spend or absorbable headroom (Bid), sales in play (Harvest), one +15% budget step to deploy (Reinvest) or −15% step saved (Trim), est. savings or TOS spend over the 65% cap (Placement), or reallocatable spend (Variation). Thresholds come from the CA SQP-Research playbook (Oct 2026). <b>Harvest &amp; Recover use lifetime data</b>; the selected {grain === 'week' ? 'week' : 'month'} range drives the other types. <b>Click a row</b> to open the tab where you act on it. Canada · Sponsored Products.<Cap n={sorted.length} cap={500} /></div>
       </div>
     </div>
   )
