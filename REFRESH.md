@@ -8,9 +8,11 @@ so they use two different runners. The one rule that matters:
 
 | Stream | Source | Window | Accumulator? | Cadence | Runner | Status |
 |---|---|---|---|---|---|---|
-| **Ranks** | Datarova Google Sheet | rolling **30 days** | ✅ `rank_daily` (upsert) | **daily** | Scheduled Claude task (gws) | ✅ **live** |
-| **Ads** | Azure Postgres (Canada Vendor Central) | full history | ❌ rebuild ok | monthly | Mac `launchd` | ✅ **built + tested** |
-| **SQP** | SellerLabs MySQL (3P) | ~12 mo | ❌ rebuild ok | monthly | Mac `launchd` | ✅ built (pull needs 1st Mac run) |
+| **Ranks** | Datarova Google Sheet | rolling **30 days** | ✅ `rank_daily` (upsert) | **daily 07:12** | Scheduled Claude task `sqp-ranks-refresh` (Drive connector) | ✅ **live** |
+| **Ads + Retail** | Azure Postgres (Canada Vendor Central) | full history | retail/detail upsert; searchterm rebuild | **daily 06:00** | Mac `launchd` `com.lifepro.sqp-refresh-db` | ✅ **live** |
+| **SQP** | SellerLabs MySQL (3P) | ~4 mo (SellerLabs cap) | month/week-keyed upsert (accumulator) | **daily 06:00** | Mac `launchd` (same job) | ✅ live — needs Mac IP on SellerLabs allowlist |
+
+> **Updated 2026-10-21:** DB lane cadence changed monthly→**daily 6am** (launchd); the ranks task is now **connector-based** (`sqp-ranks-refresh`), the old gws task `refresh-ranks-daily` is kept disabled as fallback. SellerLabs egress IP rotates across PTCL ranges wider than `119.155.0.0/16` (was `119.73.101.68` on 2026-10-21) — if SQP fails `(2013, Lost connection)`, allowlist the Mac's current `curl -s https://api.ipify.org`. The ranks task needs the desktop app open + its tools pre-approved once (Scheduled → Run now).
 
 Why two runners: Ranks pulls a Google Sheet (auth via the `gws` CLI, no DB allowlist). Ads/SQP need
 **DB creds + a static IP on the allowlist**, so they run on the Mac. Ads (Azure) + SQP builders/loader
