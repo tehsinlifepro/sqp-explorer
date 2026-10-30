@@ -306,6 +306,7 @@ function Dashboard({ region, onNav }) {
   const series = useMemo(() => rows.filter((r) => r.category === cat && mr.inRange(r.month))
     .sort((a, b) => a.month.localeCompare(b.month)), [rows, cat, mr.from, mr.to])
   const last = series[series.length - 1] || {}
+  const dashZoom = useChartZoom(series, 'month')
   if (error) return <ErrorBanner msg={error} />
   return (
     <div>
@@ -327,51 +328,54 @@ function Dashboard({ region, onNav }) {
         <div className="kpi"><div className="v">{loading ? '…' : pct(last.price_vs_niche)}</div><div className="l">Price vs niche</div></div>
       </div>
       <div className="card">
-        <h3>Our purchase share over time — {cat}</h3>
+        <h3 style={{ marginBottom: 0 }}>Our purchase share over time — {cat} <ZoomReset z={dashZoom} /></h3>
         {loading ? <SkelChart /> : !series.length ? <Empty /> : (
           <ResponsiveContainer width="100%" height={260}>
-            <LineChart data={series} margin={{ left: -10 }}>
+            <LineChart data={dashZoom.viewData} margin={{ left: -10 }} onMouseDown={dashZoom.down} onMouseMove={dashZoom.move} onMouseUp={dashZoom.up}>
               <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
-              <XAxis dataKey="month" tick={axisTick} tickFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
-              <YAxis tickFormatter={(v) => (v * 100).toFixed(0) + '%'} tick={axisTick} />
+              <XAxis dataKey="month" tick={axisTick} tickFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} allowDataOverflow />
+              <YAxis tickFormatter={(v) => (v * 100).toFixed(0) + '%'} tick={axisTick} domain={yDomainOf(dashZoom.viewData, ['our_purchase_share'])} allowDataOverflow />
               <Tooltip formatter={(v) => pct(v)} contentStyle={tipStyle} labelFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
               <Line type="monotone" dataKey="our_purchase_share" stroke={C.line} strokeWidth={2}
-                    dot={false} name="Purchase share" isAnimationActive={!REDUCED} />
+                    dot={false} name="Purchase share" isAnimationActive={false} />
+              {dashZoom.sel && <ReferenceArea x1={dashZoom.sel.a} x2={dashZoom.sel.b} strokeOpacity={0.3} fill={C.line} fillOpacity={0.08} />}
             </LineChart>
           </ResponsiveContainer>
         )}
       </div>
       <div className="grid two">
         <div className="card">
-          <h3>Share funnel: impression → click → ATC → purchase</h3>
+          <h3 style={{ marginBottom: 0 }}>Share funnel: impression → click → ATC → purchase <ZoomReset z={dashZoom} /></h3>
           {loading ? <SkelChart /> : !series.length ? <Empty /> : (
             <ResponsiveContainer width="100%" height={230}>
-              <LineChart data={series} margin={{ left: -10 }}>
+              <LineChart data={dashZoom.viewData} margin={{ left: -10 }} onMouseDown={dashZoom.down} onMouseMove={dashZoom.move} onMouseUp={dashZoom.up}>
                 <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
-                <XAxis dataKey="month" tick={axisTick} tickFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
-                <YAxis tickFormatter={(v) => (v * 100).toFixed(0) + '%'} tick={axisTick} />
+                <XAxis dataKey="month" tick={axisTick} tickFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} allowDataOverflow />
+                <YAxis tickFormatter={(v) => (v * 100).toFixed(0) + '%'} tick={axisTick} domain={yDomainOf(dashZoom.viewData, ['our_impr_share', 'our_click_share', 'our_atc_share', 'our_purchase_share'])} allowDataOverflow />
                 <Tooltip formatter={(v) => pct(v)} contentStyle={tipStyle} labelFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
-                <Line dataKey="our_impr_share" stroke={C.muted} dot={false} name="Impr" isAnimationActive={!REDUCED} />
-                <Line dataKey="our_click_share" stroke={C.line} dot={false} name="Click" isAnimationActive={!REDUCED} />
-                <Line dataKey="our_atc_share" stroke={C.warn} dot={false} name="ATC" isAnimationActive={!REDUCED} />
-                <Line dataKey="our_purchase_share" stroke={C.green} strokeWidth={2} dot={false} name="Purchase" isAnimationActive={!REDUCED} />
+                <Line dataKey="our_impr_share" stroke={C.muted} dot={false} name="Impr" isAnimationActive={false} />
+                <Line dataKey="our_click_share" stroke={C.line} dot={false} name="Click" isAnimationActive={false} />
+                <Line dataKey="our_atc_share" stroke={C.warn} dot={false} name="ATC" isAnimationActive={false} />
+                <Line dataKey="our_purchase_share" stroke={C.green} strokeWidth={2} dot={false} name="Purchase" isAnimationActive={false} />
+                {dashZoom.sel && <ReferenceArea x1={dashZoom.sel.a} x2={dashZoom.sel.b} strokeOpacity={0.3} fill={C.line} fillOpacity={0.08} />}
               </LineChart>
             </ResponsiveContainer>
           )}
         </div>
         <div className="card">
-          <h3>Our price vs niche median price</h3>
+          <h3 style={{ marginBottom: 0 }}>Our price vs niche median price <ZoomReset z={dashZoom} /></h3>
           {loading ? <SkelChart /> : !series.length ? <Empty /> : (
             <ResponsiveContainer width="100%" height={230}>
-              <LineChart data={series} margin={{ left: -10 }}>
+              <LineChart data={dashZoom.viewData} margin={{ left: -10 }} onMouseDown={dashZoom.down} onMouseMove={dashZoom.move} onMouseUp={dashZoom.up}>
                 <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
-                <XAxis dataKey="month" tick={axisTick} tickFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
-                <YAxis tick={axisTick} />
+                <XAxis dataKey="month" tick={axisTick} tickFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} allowDataOverflow />
+                <YAxis tick={axisTick} domain={yDomainOf(dashZoom.viewData, ['niche_median_price', 'our_median_price'])} allowDataOverflow />
                 <Tooltip contentStyle={tipStyle} labelFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
                 <Legend wrapperStyle={{ fontSize: 11 }} />
-                <Line dataKey="niche_median_price" stroke={C.muted} dot={false} name="Niche" isAnimationActive={!REDUCED} />
-                <Line dataKey="our_median_price" stroke={C.line} strokeWidth={2} dot={false} name="Ours" isAnimationActive={!REDUCED} />
+                <Line dataKey="niche_median_price" stroke={C.muted} dot={false} name="Niche" isAnimationActive={false} />
+                <Line dataKey="our_median_price" stroke={C.line} strokeWidth={2} dot={false} name="Ours" isAnimationActive={false} />
+                {dashZoom.sel && <ReferenceArea x1={dashZoom.sel.a} x2={dashZoom.sel.b} strokeOpacity={0.3} fill={C.line} fillOpacity={0.08} />}
               </LineChart>
             </ResponsiveContainer>
           )}
