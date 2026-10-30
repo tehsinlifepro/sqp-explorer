@@ -20,6 +20,15 @@ create table if not exists competition_brand (
   rnk int, updated date,
   primary key (region, category, brand));
 
+-- Enrichment columns on competition_brand (free + tiny-surcharge Keepa signals, per brand's lead ASIN).
+alter table competition_brand add column if not exists rating real;
+alter table competition_brand add column if not exists review_count int;
+alter table competition_brand add column if not exists price numeric;
+alter table competition_brand add column if not exists oos_pct real;
+alter table competition_brand add column if not exists rank_drops int;
+alter table competition_brand add column if not exists amazon_on boolean;
+alter table competition_brand add column if not exists bb_amazon boolean;
+
 -- Subcategory BSR rank history (Serpstat-style multi-line trend), per brand's representative ASIN.
 create table if not exists competition_rank_history (
   region text, category text, brand text, asin text, date date, bsr int,

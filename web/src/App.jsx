@@ -577,13 +577,19 @@ function CompetitionWatch({ region }) {
       <div className="card">
         <h3>Brands in {cat}</h3>
         <table>
-          <thead><tr><th>#</th><th>Brand</th><th className="num">Share</th><th className="num">Units / mo</th><th className="num">ASINs</th></tr></thead>
+          <thead><tr><th>#</th><th>Brand</th><th className="num">Share</th><th className="num">Units / mo</th><th className="num">Price</th><th className="num">Rating</th><th className="num">Reviews</th><th className="num">OOS %</th><th className="num">Rank drops 90d</th><th className="num">ASINs</th></tr></thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.brand} style={r.is_ours ? { background: '#e6f1ee' } : undefined}>
                 <td>{r.rnk}</td>
-                <td>{r.brand}{r.is_ours && <span className="pill good" style={{ marginLeft: 6 }}>OURS</span>}</td>
-                <td className="num">{pct(r.share)}</td><td className="num">{num(r.units_monthly)}</td><td className="num">{r.asin_count}</td>
+                <td>{r.brand}{r.is_ours && <span className="pill good" style={{ marginLeft: 6 }}>OURS</span>}{r.bb_amazon && <span className="pill warn" style={{ marginLeft: 6 }}>AMZ buybox</span>}</td>
+                <td className="num">{pct(r.share)}</td><td className="num">{num(r.units_monthly)}</td>
+                <td className="num">{r.price != null ? money(r.price, region) : '—'}</td>
+                <td className="num">{r.rating != null ? r.rating + '★' : '—'}</td>
+                <td className="num">{r.review_count != null ? num(r.review_count) : '—'}</td>
+                <td className="num">{r.oos_pct != null ? Math.round(r.oos_pct) + '%' : '—'}</td>
+                <td className="num">{r.rank_drops != null ? num(r.rank_drops) : '—'}</td>
+                <td className="num">{r.asin_count}</td>
               </tr>
             ))}
           </tbody>

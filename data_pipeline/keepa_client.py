@@ -49,19 +49,49 @@ def _get(path, params, cache_tag, use_cache=True):
             time.sleep(5)
     raise SystemExit("keepa request failed after retries")
 
-def product(asins, domain, stats=1, history=0, use_cache=True):
-    """Pull up to 100 ASINs in one call (1 token each). history=1 adds salesRanks time series.
-    Returns list of product dicts."""
+def product(asins, domain, stats=1, history=0, rating=0, buybox=0, use_cache=True):
+    """Pull up to 100 ASINs in one call. history=1 adds salesRanks; rating=1 (+<=1 tok) adds
+    rating/review history; buybox=1 (+2 tok) adds buy-box winner + buyBoxIsAmazon. Returns product dicts."""
     asins = [a for a in asins if a]
     out, tokens_left = [], None
     for i in range(0, len(asins), 100):
         chunk = asins[i:i + 100]
-        tag = f"product_d{domain}_h{history}_" + hashlib.md5((",".join(chunk)).encode()).hexdigest()[:16]
-        d, cached = _get("product", {"domain": domain, "asin": ",".join(chunk), "stats": stats, "history": history}, tag, use_cache)
+        tag = f"product_d{domain}_h{history}_r{rating}_b{buybox}_" + hashlib.md5((",".join(chunk)).encode()).hexdigest()[:16]
+        params = {"domain": domain, "asin": ",".join(chunk), "stats": stats, "history": history}
+        if rating: params["rating"] = 1
+        if buybox: params["buybox"] = 1
+        d, cached = _get("product", params, tag, use_cache)
         out += (d.get("products") or [])
         tokens_left = d.get("tokensLeft", tokens_left)
         if not cached: time.sleep(1.1)  # be gentle on the refill rate
     return out, tokens_left
+
+def price_of(p):
+    """Current price in currency units from stats (NEW, else AMAZON, else NEW_FBA). Keepa prices are cents."""
+    st = (p.get("stats") or {}).get("current") or []
+    for i in (1, 0, 10):
+        if i < len(st) and st[i] and st[i] > 0:
+            return round(st[i] / 100.0, 2)
+    return None
+
+def enrich_fields(p):
+    """Pull the FREE + tiny-surcharge competitor signals from a product (stats=90, rating=1, buybox=1)."""
+    st = p.get("stats") or {}
+    cur = st.get("current") or []
+    def ci(i): return cur[i] if i < len(cur) and cur[i] is not None and cur[i] >= 0 else None
+    oos = st.get("outOfStockPercentage90") or []
+    def oi(i): return oos[i] if i < len(oos) and oos[i] is not None and oos[i] >= 0 else None
+    rating = ci(16)       # value*10 (45 = 4.5 stars)
+    return {
+        "monthly_sold": p.get("monthlySold"),
+        "rating": round(rating / 10.0, 1) if rating else None,
+        "review_count": ci(17),
+        "price": price_of(p),
+        "oos_pct": oi(1) if oi(1) is not None else oi(0),      # NEW else AMAZON out-of-stock %
+        "rank_drops": st.get("salesRankDrops90"),
+        "amazon_on": (p.get("availabilityAmazon", -1) != -1),  # Amazon itself has an offer
+        "bb_amazon": st.get("buyBoxIsAmazon"),                 # Amazon holds the Buy Box
+    }
 
 def rank_history(p, cat_id, since_date=None):
     """Extract subcategory BSR history for cat_id from a product (history=1). Returns [(date, bsr)]."""
