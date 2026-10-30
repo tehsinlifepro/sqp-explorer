@@ -20,10 +20,15 @@ create table if not exists competition_brand (
   rnk int, updated date,
   primary key (region, category, brand));
 
+-- Subcategory BSR rank history (Serpstat-style multi-line trend), per brand's representative ASIN.
+create table if not exists competition_rank_history (
+  region text, category text, brand text, asin text, date date, bsr int,
+  primary key (region, category, asin, date));
+
 do $$
 declare t text;
 begin
-  foreach t in array array['keepa_raw','competition_asin','competition_brand'] loop
+  foreach t in array array['keepa_raw','competition_asin','competition_brand','competition_rank_history'] loop
     execute format('alter table %I enable row level security', t);
     execute format('drop policy if exists sel_auth on %I', t);
     execute format('create policy sel_auth on %I for select to authenticated using (true)', t);

@@ -2,7 +2,7 @@
 """Load US Amazon ads (USA Reason Azure DB) into the Supabase ad_*/sd_* tables with region='US',
 mirroring the Canada pipeline exactly. US schema is a superset of CA; every CA target maps 1:1.
 
-- Source: USA Reason public.ads_* (.secrets/usa-reason.env). MULTI-TENANT → filter ads_account_name='LifePro Fitness'.
+- Source: USA Reason public.ads_* (.secrets/usa-reason.env). MULTI-TENANT but US sells ALL brands → NO account filter (D-005).
 - Target: Supabase via pooler (.secrets/supabase.env PGPASSWORD).
 - Dry-run by DEFAULT (reads source, prints QC, writes NOTHING). Pass --write to load Supabase.
 - ad_searchterm/_week have no PK → delete-where-region+insert (NOT truncate). Others upsert on PK.
@@ -14,7 +14,7 @@ import os, sys, psycopg2
 from psycopg2.extras import execute_values
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ACCT = "LifePro Fitness"
+ACCT = None  # D-005: US sells/advertises ALL brands — no account filter (was "LifePro Fitness")
 REGION = "US"
 WRITE = "--write" in sys.argv
 
@@ -51,7 +51,7 @@ def lane_searchterm(grain):
         round(sum("7_day_total_sales")::numeric,2), sum("7_day_total_orders"), sum("7_day_total_units"),
         round(sum("7_day_advertised_sku_sales")::numeric,2), null::real, null::real
       from public.ads_sponsored_products_search_term
-      where ads_account_name=%s and date is not null and {CID_OK} and customer_search_term is not null
+      where date is not null and {CID_OK} and customer_search_term is not null
       group by campaign_id::bigint, customer_search_term, {px}"""
     sb = f"""select 'US','SB', {px} as period, campaign_id::bigint, customer_search_term,
         sum(impressions), sum(clicks), round(sum(spend)::numeric,2),
@@ -59,11 +59,11 @@ def lane_searchterm(grain):
         round(sum("14_day_same_sku_sales")::numeric,2),
         round(avg(search_term_impression_share)::numeric,4), round(avg(search_term_impression_rank)::numeric,1)
       from public.ads_sponsored_brands_search_term
-      where ads_account_name=%s and date is not null and {CID_OK} and customer_search_term is not null
+      where date is not null and {CID_OK} and customer_search_term is not null
       group by campaign_id::bigint, customer_search_term, {px}"""
     cols = ["region","program",("month" if grain=="month" else "week"),"campaign_id","customer_search_term",
             "impressions","clicks","spend","sales","orders","units","adv_sku_sales","impr_share","impr_rank"]
-    return ("ad_searchterm" if grain=="month" else "ad_searchterm_week"), cols, None, [(sp,[ACCT]),(sb,[ACCT])]
+    return ("ad_searchterm" if grain=="month" else "ad_searchterm_week"), cols, None, [(sp,[]),(sb,[])]
 
 def lane_asin(grain):
     px = pexpr(grain)
@@ -72,12 +72,12 @@ def lane_asin(grain):
         sum("7_day_total_orders"), round(sum("7_day_total_sales")::numeric,2),
         round(sum("7_day_advertised_sku_sales")::numeric,2), round(sum("7_day_other_sku_sales")::numeric,2)
       from public.ads_sponsored_products_advertised_product
-      where ads_account_name=%s and date is not null and {CID_OK}
+      where date is not null and {CID_OK}
       group by campaign_id::bigint, coalesce(advertised_asin,''), {px}"""
     pc = "month" if grain=="month" else "week"
     cols = ["region","program",pc,"campaign_id","advertised_asin","impressions","clicks","spend","orders","sales","adv_sku_sales","other_sku_sales"]
     pk = ["region","program",pc,"campaign_id","advertised_asin"]
-    return ("ad_asin_month" if grain=="month" else "ad_asin_week"), cols, pk, [(q,[ACCT])]
+    return ("ad_asin_month" if grain=="month" else "ad_asin_week"), cols, pk, [(q,[])]
 
 def lane_placement(grain):
     px = pexpr(grain)
@@ -85,12 +85,12 @@ def lane_placement(grain):
         sum(impressions), sum(clicks), round(sum(spend)::numeric,2),
         sum("7_day_total_orders"), round(sum("7_day_total_sales")::numeric,2)
       from public.ads_sponsored_products_campaign_placements
-      where ads_account_name=%s and date is not null and {CID_OK}
+      where date is not null and {CID_OK}
       group by campaign_id::bigint, coalesce(placement_type,''), {px}"""
     pc = "month" if grain=="month" else "week"
     cols = ["region","program",pc,"campaign_id","placement_type","bidding_strategy","impressions","clicks","spend","orders","sales"]
     pk = ["region","program",pc,"campaign_id","placement_type"]
-    return ("ad_placement_month" if grain=="month" else "ad_placement_week"), cols, pk, [(q,[ACCT])]
+    return ("ad_placement_month" if grain=="month" else "ad_placement_week"), cols, pk, [(q,[])]
 
 def lane_targeting(grain):
     px = pexpr(grain)
@@ -99,12 +99,12 @@ def lane_targeting(grain):
         sum(impressions), sum(clicks), round(sum(spend)::numeric,2),
         sum("7_day_total_orders"), round(sum("7_day_total_sales")::numeric,2)
       from public.ads_sponsored_products_targeting
-      where ads_account_name=%s and date is not null and {CID_OK}
+      where date is not null and {CID_OK}
       group by campaign_id::bigint, coalesce(ad_group_id::text,''), coalesce(match_type,''), coalesce(targeting,''), {px}"""
     pc = "month" if grain=="month" else "week"
     cols = ["region","program",pc,"campaign_id","ad_group_id","keyword_type","match_type","targeting","keyword_bid","impressions","clicks","spend","orders","sales"]
     pk = ["region","program",pc,"campaign_id","ad_group_id","targeting","match_type"]
-    return ("ad_targeting" if grain=="month" else "ad_targeting_week"), cols, pk, [(q,[ACCT])]
+    return ("ad_targeting" if grain=="month" else "ad_targeting_week"), cols, pk, [(q,[])]
 
 def lane_sd(grain):
     px = pexpr(grain)
@@ -114,12 +114,12 @@ def lane_sd(grain):
         round(sum("14_day_new_to_brand_sales")::numeric,2), round(sum("14_day_new_to_brand_orders"))::bigint,
         sum("14_day_dpv")::bigint, sum(add_to_cart)::bigint, round(sum("view_attributed_sales_14d")::numeric,2)
       from public.ads_sponsored_display_campaign
-      where ads_account_name=%s and date is not null and {CID_OK}
+      where date is not null and {CID_OK}
       group by campaign_id::bigint, {px}"""
     pc = "month" if grain=="month" else "week"
     cols = ["region",pc,"campaign_id","campaign_name","impressions","clicks","spend","sales","orders","ntb_sales","ntb_orders","dpv","atc","view_sales"]
     pk = ["region",pc,"campaign_id"]
-    return ("sd_campaign_month" if grain=="month" else "sd_campaign_week"), cols, pk, [(q,[ACCT])]
+    return ("sd_campaign_month" if grain=="month" else "sd_campaign_week"), cols, pk, [(q,[])]
 
 LANES = [lane_searchterm, lane_asin, lane_placement, lane_targeting, lane_sd]
 

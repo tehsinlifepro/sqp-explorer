@@ -49,18 +49,35 @@ def _get(path, params, cache_tag, use_cache=True):
             time.sleep(5)
     raise SystemExit("keepa request failed after retries")
 
-def product(asins, domain, stats=1, use_cache=True):
-    """Pull up to 100 ASINs in one call (1 token each). Returns list of product dicts."""
+def product(asins, domain, stats=1, history=0, use_cache=True):
+    """Pull up to 100 ASINs in one call (1 token each). history=1 adds salesRanks time series.
+    Returns list of product dicts."""
     asins = [a for a in asins if a]
     out, tokens_left = [], None
     for i in range(0, len(asins), 100):
         chunk = asins[i:i + 100]
-        tag = f"product_d{domain}_" + hashlib.md5((",".join(chunk)).encode()).hexdigest()[:16]
-        d, cached = _get("product", {"domain": domain, "asin": ",".join(chunk), "stats": stats, "history": 0}, tag, use_cache)
+        tag = f"product_d{domain}_h{history}_" + hashlib.md5((",".join(chunk)).encode()).hexdigest()[:16]
+        d, cached = _get("product", {"domain": domain, "asin": ",".join(chunk), "stats": stats, "history": history}, tag, use_cache)
         out += (d.get("products") or [])
         tokens_left = d.get("tokensLeft", tokens_left)
         if not cached: time.sleep(1.1)  # be gentle on the refill rate
     return out, tokens_left
+
+def rank_history(p, cat_id, since_date=None):
+    """Extract subcategory BSR history for cat_id from a product (history=1). Returns [(date, bsr)]."""
+    import datetime
+    sr = (p.get("salesRanks") or {}).get(str(cat_id)) or []
+    epoch = datetime.datetime(2011, 1, 1)
+    out = []
+    for i in range(0, len(sr) - 1, 2):
+        t, r = sr[i], sr[i + 1]
+        if r is None or r < 0:
+            continue
+        dt = (epoch + datetime.timedelta(minutes=t)).date()
+        if since_date and dt < since_date:
+            continue
+        out.append((dt, r))
+    return out
 
 def bestsellers(category, domain, use_cache=True):
     """Ranked ASIN list for a category (50 tokens). Returns (asinList, tokensLeft)."""

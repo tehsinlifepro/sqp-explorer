@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { supabase, VIEWER_EMAIL } from './supabaseClient'
 import {
   LineChart, Line, AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend, ReferenceLine,
-  BarChart, Bar, Cell,
+  BarChart, Bar, Cell, ComposedChart, ReferenceArea,
 } from 'recharts'
 
 const REGIONS = [{ id: 'US', label: 'USA (Amazon.com)' }, { id: 'CA', label: 'Canada (Amazon.ca)' }]
@@ -395,6 +395,9 @@ function MarketShare({ region }) {
     .sort((a, b) => a.month.localeCompare(b.month)), [rows, cat, mr.from, mr.to])
   const last = series[series.length - 1] || {}
   if (error) return <ErrorBanner msg={error} />
+  const [stage, setStage] = useState('impressions')
+  const STAGES = [['impressions', 'Impressions'], ['clicks', 'Clicks'], ['cart_adds', 'Cart-adds'], ['purchases', 'Purchases']]
+  const msZoom = useChartZoom(series, 'month')
   const AREAS = [
     ['our_impr_share', 'Impression share', C.muted],
     ['our_click_share', 'Click share', C.line],
@@ -420,10 +423,11 @@ function MarketShare({ region }) {
         <div className="kpi"><div className="v">{loading ? '…' : pct(last.our_purchase_share)}</div><div className="l">Purchase share</div></div>
       </div>
       <div className="card">
-        <h3>Our market share by funnel stage — {cat} ({region})</h3>
+        <h3 style={{ marginBottom: 0 }}>Our market share by funnel stage — {cat} ({region}) <ZoomReset z={msZoom} /></h3>
         {loading ? <SkelChart /> : !series.length ? <Empty /> : (
           <ResponsiveContainer width="100%" height={380}>
-            <AreaChart data={series} margin={{ left: -4 }}>
+            <AreaChart data={msZoom.viewData} margin={{ left: -4 }}
+                       onMouseDown={msZoom.down} onMouseMove={msZoom.move} onMouseUp={msZoom.up}>
               <defs>
                 {AREAS.map(([key, , col]) => (
                   <linearGradient key={key} id={`ms-${key}`} x1="0" y1="0" x2="0" y2="1">
@@ -433,18 +437,52 @@ function MarketShare({ region }) {
                 ))}
               </defs>
               <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
-              <XAxis dataKey="month" tick={axisTick} tickFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
-              <YAxis tickFormatter={(v) => (v * 100).toFixed(0) + '%'} tick={axisTick} />
+              <XAxis dataKey="month" tick={axisTick} tickFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} allowDataOverflow />
+              <YAxis tickFormatter={(v) => (v * 100).toFixed(0) + '%'} tick={axisTick} domain={yDomainOf(msZoom.viewData, AREAS.map((a) => a[0]))} allowDataOverflow />
               <Tooltip formatter={(v) => pct(v)} contentStyle={tipStyle} labelFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
               {AREAS.map(([key, name, col]) => (
                 <Area key={key} type="monotone" dataKey={key} name={name} stroke={col}
                       strokeWidth={key === 'our_purchase_share' ? 2.4 : 1.4}
-                      fill={`url(#ms-${key})`} isAnimationActive={!REDUCED} />
+                      fill={`url(#ms-${key})`} isAnimationActive={false} />
               ))}
+              {msZoom.sel && <ReferenceArea x1={msZoom.sel.a} x2={msZoom.sel.b} strokeOpacity={0.3} fill={C.line} fillOpacity={0.08} />}
             </AreaChart>
           </ResponsiveContainer>
         )}
+      </div>
+      <div className="card">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <h3 style={{ margin: 0 }}>Us vs Market — {STAGES.find((x) => x[0] === stage)[1]} ({region}) <ZoomReset z={msZoom} /></h3>
+          <div className="tabs" role="tablist" aria-label="Funnel stage" style={{ marginLeft: 'auto' }}>
+            {STAGES.map(([k, l]) => (
+              <button key={k} type="button" className={'tab' + (stage === k ? ' active' : '')} role="tab"
+                      aria-selected={stage === k} onClick={() => setStage(k)}>{l}</button>))}
+          </div>
+        </div>
+        {loading ? <SkelChart /> : !series.length ? <Empty /> : (
+          <ResponsiveContainer width="100%" height={300}>
+            <ComposedChart data={msZoom.viewData} margin={{ left: 4, right: 6 }}
+                           onMouseDown={msZoom.down} onMouseMove={msZoom.move} onMouseUp={msZoom.up}>
+              <defs>
+                <linearGradient id="ms-mkt" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={C.muted} stopOpacity={0.28} />
+                  <stop offset="100%" stopColor={C.muted} stopOpacity={0.03} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
+              <XAxis dataKey="month" tick={axisTick} tickFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} allowDataOverflow />
+              <YAxis yAxisId="mkt" tick={axisTick} tickFormatter={kfmt} domain={yDomainOf(msZoom.viewData, [`market_${stage}`])} allowDataOverflow />
+              <YAxis yAxisId="our" orientation="right" tick={axisTick} tickFormatter={kfmt} domain={yDomainOf(msZoom.viewData, [`our_${stage}`])} allowDataOverflow />
+              <Tooltip contentStyle={tipStyle} formatter={(v, n) => [num(v), n]} labelFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              <Area yAxisId="mkt" type="monotone" dataKey={`market_${stage}`} name="Market (total)" stroke={C.muted} fill="url(#ms-mkt)" strokeWidth={1.4} isAnimationActive={false} />
+              <Line yAxisId="our" type="monotone" dataKey={`our_${stage}`} name="Us" stroke={C.line} strokeWidth={2.4} dot={false} isAnimationActive={false} />
+              {msZoom.sel && <ReferenceArea yAxisId="mkt" x1={msZoom.sel.a} x2={msZoom.sel.b} strokeOpacity={0.3} fill={C.line} fillOpacity={0.08} />}
+            </ComposedChart>
+          </ResponsiveContainer>
+        )}
+        <div className="muted small" style={{ marginTop: 6 }}>Dual axis: <b>Market total</b> (left, shaded) vs <b>Us</b> (right, line) on the same queries — separate scales since our volume is a small slice of the market.</div>
       </div>
       <div className="muted small" style={{ marginTop: 10 }}>
         Share = our ASINs’ count ÷ the market total on the same search queries, at each funnel stage
@@ -456,13 +494,23 @@ function MarketShare({ region }) {
 }
 
 /* ---------------- Competition Watch (WS3 — subcategory market share incl. competitors, via Keepa) ---------------- */
+const CW_PALETTE = ['#c2410c', '#4f46e5', '#0891b2', '#9333ea', '#15803d', '#a16207', '#be123c', '#a89f92']
 function CompetitionWatch({ region }) {
   const { rows: brands, loading, error } = useRows('competition_brand', { region })
+  const { rows: hist } = useRows('competition_rank_history', { region })
   const cats = useMemo(() => [...new Set(brands.map((r) => r.category))].sort(), [brands])
   const [cat, setCat] = useState('')
   useEffect(() => { if (cats.length && !cats.includes(cat)) setCat(cats[0]) }, [cats]) // eslint-disable-line
   const rows = useMemo(() => brands.filter((r) => r.category === cat).sort((a, b) => (b.share || 0) - (a.share || 0)), [brands, cat])
   const top = rows.slice(0, 15)
+  const histSeries = useMemo(() => {
+    const h = hist.filter((r) => r.category === cat)
+    const hb = top.filter((b) => h.some((r) => r.brand === b.brand)).slice(0, 8)
+    const byDate = {}
+    h.forEach((r) => { (byDate[r.date] || (byDate[r.date] = { date: r.date }))[r.brand] = r.bsr })
+    return { data: Object.values(byDate).sort((a, b) => String(a.date).localeCompare(String(b.date))), brands: hb }
+  }, [hist, cat, top])
+  const histZoom = useChartZoom(histSeries.data, 'date')
   const ours = rows.find((r) => r.is_ours)
   const mktUnits = useMemo(() => rows.reduce((s, r) => s + (r.units_monthly || 0), 0), [rows])
   const updated = rows[0]?.updated
@@ -499,6 +547,28 @@ function CompetitionWatch({ region }) {
             </BarChart>
           </ResponsiveContainer>
         )}
+      </div>
+      <div className="card">
+        <h3 style={{ marginBottom: 0 }}>Subcategory BSR rank trend — {cat} ({region}) <ZoomReset z={histZoom} /></h3>
+        {!histSeries.data.length ? <div className="muted small">No rank history yet for this subcategory (run build_competition_history).</div> : (
+          <ResponsiveContainer width="100%" height={320}>
+            <LineChart data={histZoom.viewData} margin={{ left: -4, right: 8 }}
+                       onMouseDown={histZoom.down} onMouseMove={histZoom.move} onMouseUp={histZoom.up}>
+              <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
+              <XAxis dataKey="date" tick={axisTick} allowDataOverflow />
+              <YAxis reversed allowDecimals={false} tick={axisTick} domain={yDomainOf(histZoom.viewData, histSeries.brands.map((b) => b.brand))} allowDataOverflow />
+              <Tooltip contentStyle={tipStyle} formatter={(v, n) => ['#' + num(v), n]} />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              {histSeries.brands.map((b, i) => (
+                <Line key={b.brand} type="monotone" dataKey={b.brand} name={b.brand + (b.is_ours ? ' (us)' : '')}
+                      stroke={b.is_ours ? C.line : CW_PALETTE[i % CW_PALETTE.length]}
+                      strokeWidth={b.is_ours ? 3 : 1.6} dot={false} connectNulls isAnimationActive={false} />
+              ))}
+              {histZoom.sel && <ReferenceArea x1={histZoom.sel.a} x2={histZoom.sel.b} strokeOpacity={0.3} fill={C.line} fillOpacity={0.08} />}
+            </LineChart>
+          </ResponsiveContainer>
+        )}
+        <div className="muted small" style={{ marginTop: 6 }}>Keepa subcategory Best-Seller-Rank, last ~6 months (weekly), each top brand's lead ASIN. Y-axis inverted — <b>#1 is at the top</b>. <b>Drag across the chart to zoom</b> (Y auto-adjusts); Reset to zoom out.</div>
       </div>
       <div className="card">
         <h3>Brands in {cat}</h3>
@@ -816,6 +886,41 @@ function KeywordExplorer({ region }) {
 const AREA_COLORS = ['#0f766e', '#c2410c', '#d97706', '#4f46e5', '#be185d', '#15803d', '#0891b2', '#7c3aed']
 const shortKw = (k) => (k && k.length > 22 ? k.slice(0, 21) + '…' : k)
 const kfmt = (v) => (v >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : v >= 1e3 ? (v / 1e3).toFixed(0) + 'k' : v)
+// auto Y-domain from the visible rows across the given keys (padded) — keeps zoom "Y adjusted"
+const yDomainOf = (rows, keys, pad = 0.06) => {
+  let mn = Infinity, mx = -Infinity
+  rows.forEach((r) => keys.forEach((k) => { const v = r[k]; if (v != null && isFinite(v)) { if (v < mn) mn = v; if (v > mx) mx = v } }))
+  if (mn === Infinity) return ['auto', 'auto']
+  const d = (mx - mn) * pad || Math.abs(mx) * pad || 1
+  return [mn - d < 0 ? 0 : +(mn - d).toPrecision(3), +(mx + d).toPrecision(3)]
+}
+// Keepa-style drag-to-zoom for time-series charts: drag across the plot to zoom the x-range.
+function useChartZoom(data, xKey) {
+  const [sel, setSel] = useState(null)       // { a, b } active labels while dragging
+  const [range, setRange] = useState(null)   // [fromLabel, toLabel] committed
+  const down = (e) => { if (e && e.activeLabel != null) setSel({ a: e.activeLabel, b: e.activeLabel }) }
+  const move = (e) => setSel((s) => (s && e && e.activeLabel != null ? { a: s.a, b: e.activeLabel } : s))
+  const up = () => setSel((s) => {
+    if (s && String(s.a) !== String(s.b)) {
+      const xs = data.map((d) => String(d[xKey]))
+      let i = xs.indexOf(String(s.a)), j = xs.indexOf(String(s.b))
+      if (i > j) { const t = i; i = j; j = t }
+      if (i >= 0 && j >= 0) setRange([xs[i], xs[j]])
+    }
+    return null
+  })
+  const reset = () => setRange(null)
+  const viewData = useMemo(() => {
+    if (!range) return data
+    const xs = data.map((d) => String(d[xKey]))
+    const i = xs.indexOf(range[0]), j = xs.indexOf(range[1])
+    return (i >= 0 && j >= 0) ? data.slice(i, j + 1) : data
+  }, [data, range, xKey])
+  return { viewData, sel, zoomed: !!range, down, move, up, reset }
+}
+const ZoomReset = ({ z }) => (z.zoomed
+  ? <button type="button" className="tab" style={{ marginLeft: 8 }} onClick={z.reset}>⤢ Reset zoom</button>
+  : <span className="muted small" style={{ marginLeft: 8 }}>drag to zoom</span>)
 
 function FamilyExplorer({ region }) {
   const [grain, setGrain] = useState('month')
