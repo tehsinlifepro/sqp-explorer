@@ -58,6 +58,11 @@ cur.execute("""create table if not exists rank_daily(
   marketplace text, project text, keyword text, date date, ranked_asin text default '',
   organic_rank real, sponsored_rank real, ac_badge boolean,
   primary key(marketplace,project,keyword,date,ranked_asin));""")
+# Self-heal RLS every run so the accumulator can never be left publicly writable
+# (matches ranks_schema.sql and the sel_auth convention on every other data table).
+cur.execute("alter table rank_daily enable row level security;")
+cur.execute("drop policy if exists sel_auth on rank_daily;")
+cur.execute("create policy sel_auth on rank_daily for select to authenticated using (true);")
 c.commit()
 cur.execute("select count(*) from rank_daily"); before = cur.fetchone()[0]
 

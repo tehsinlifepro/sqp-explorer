@@ -10,3 +10,8 @@ web/.env
 data_export/*.csv
 # refresh lane log (local run output, not source)
 data_pipeline/refresh.log
+# build-loop logs, session files, keepa cache, local backups — not source
+.build-loop/
+.claude/
+data_pipeline/.keepa_cache/
+data_pipeline/*.BACKUP*.csv

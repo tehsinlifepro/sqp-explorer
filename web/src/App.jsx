@@ -2,12 +2,15 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { supabase, VIEWER_EMAIL } from './supabaseClient'
 import {
   LineChart, Line, AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend, ReferenceLine,
+  BarChart, Bar, Cell,
 } from 'recharts'
 
 const REGIONS = [{ id: 'US', label: 'USA (Amazon.com)' }, { id: 'CA', label: 'Canada (Amazon.ca)' }]
 const pct = (x) => (x == null ? '—' : (x * 100).toFixed(1) + '%')
 const num = (x) => (x == null ? '—' : Number(x).toLocaleString())
 const money = (x, r) => (x == null ? '—' : (r === 'CA' ? 'C$' : '$') + Number(x).toFixed(0))
+const rlabel = (r) => (r === 'CA' ? 'Canada' : 'USA')
+const cur$ = (r) => (r === 'CA' ? 'C$' : '$')
 const MON_ABBR = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
 const fmtMonth = (m) => { if (!m) return ''; const [y, mm] = String(m).split('-'); return `${MON_ABBR[(+mm) - 1] || mm} ${y}` }
 const fmtWeek = (d) => { if (!d) return ''; const [, m, dd] = String(d).split('-'); return `Wk ${MON_ABBR[(+m) - 1] || m} ${+dd}` }
@@ -254,9 +257,9 @@ function Login({ onIn }) {
 /* ---------------- Dashboard ---------------- */
 // "What do I do next" strip for the Dashboard — top paid opportunities + account TACOS vs target.
 // Reuses the shared useRecs engine (CA-only paid data); clicking a row jumps to the Recommendations tab.
-function ActionStrip({ onNav }) {
-  const { all: recs, accountTacos, loading } = useRecs('month')
-  const { rows: tgtRows } = useRows('targets', { region: 'CA' })
+function ActionStrip({ region, onNav }) {
+  const { all: recs, accountTacos, loading } = useRecs('month', region)
+  const { rows: tgtRows } = useRows('targets', { region })
   const tacTgt = useMemo(() => {
     const a = [...tgtRows].filter((r) => r.scope === 'Account' && r.tacos_target != null).sort((x, y) => x.month.localeCompare(y.month)).pop()
     return a ? a.tacos_target : 0.22
@@ -269,22 +272,22 @@ function ActionStrip({ onNav }) {
   return (
     <div className="card" style={{ marginBottom: 16, borderColor: 'var(--cyan)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <h3 style={{ margin: 0 }}>Act now <span className="muted small">· Canada · top paid opportunities</span></h3>
+        <h3 style={{ margin: 0 }}>Act now <span className="muted small">· {rlabel(region)} · top paid opportunities</span></h3>
         <button className="primary small" onClick={() => onNav && onNav('rec')}>See all recommendations →</button>
       </div>
       <div className="kpis" style={{ marginTop: 12 }}>
         <div className="kpi"><div className="v"><span className={'badge ' + (accountTacos == null ? 'flat' : overCeil ? 'down' : 'up')}>{accountTacos != null ? pct(accountTacos) : '—'}</span></div><div className="l">Account TACOS vs {Math.round(tacTgt * 1000) / 10}% target</div></div>
         <div className="kpi"><div className="v">{num(recs.length)}</div><div className="l">Open recommendations</div></div>
-        <div className="kpi"><div className="v">{money(atStake, 'CA')}</div><div className="l">C$ at stake</div></div>
+        <div className="kpi"><div className="v">{money(atStake, region)}</div><div className="l">{cur$(region)} at stake</div></div>
       </div>
       {top.length > 0 && (
         <div className="table-scroll" style={{ marginTop: 8 }}><table>
-          <thead><tr><th>Do next</th><th>Why</th><th className="num">C$ at stake</th></tr></thead>
+          <thead><tr><th>Do next</th><th>Why</th><th className="num">{cur$(region)} at stake</th></tr></thead>
           <tbody>{top.map((r, i) => (
             <tr key={i} className="rowbtn" onClick={() => onNav && onNav('rec')} title="Open Recommendations">
               <td><span className={recBadge(r.type)} style={{ marginRight: 8 }}>{TL[r.type] || r.type}</span><b>{r.action}</b></td>
               <td className="muted small">{r.reason}</td>
-              <td className="num">{money(r.impact, 'CA')}</td>
+              <td className="num">{money(r.impact, region)}</td>
             </tr>))}
           </tbody></table></div>)}
     </div>
@@ -306,7 +309,7 @@ function Dashboard({ region, onNav }) {
   if (error) return <ErrorBanner msg={error} />
   return (
     <div>
-      <ActionStrip onNav={onNav} />
+      <ActionStrip region={region} onNav={onNav} />
       <div className="controls">
         <div className="field">
           <label htmlFor="dash-cat">Category</label>
@@ -373,6 +376,147 @@ function Dashboard({ region, onNav }) {
             </ResponsiveContainer>
           )}
         </div>
+      </div>
+    </div>
+  )
+}
+
+/* ---------------- Market Share (area graph — the funnel-stage cascade over time) ---------------- */
+function MarketShare({ region }) {
+  const [grain, setGrain] = useState('month')
+  const { rows: raw, loading, error } = useRows(`category_${grain}`, { region })
+  const rows = useMemo(() => grain === 'week' ? raw.map((r) => ({ ...r, month: r.week })) : raw, [raw, grain])
+  const [cat, setCat] = useState('Vibration Plate')
+  const cats = useMemo(() => [...new Set(rows.map((r) => r.category))].sort(), [rows])
+  useEffect(() => { if (cats.length && !cats.includes(cat)) setCat(cats[0]) }, [cats]) // eslint-disable-line
+  const months = useMemo(() => [...new Set(rows.filter((r) => r.category === cat).map((r) => r.month))].sort(), [rows, cat])
+  const mr = useMonthRange(months)
+  const series = useMemo(() => rows.filter((r) => r.category === cat && mr.inRange(r.month))
+    .sort((a, b) => a.month.localeCompare(b.month)), [rows, cat, mr.from, mr.to])
+  const last = series[series.length - 1] || {}
+  if (error) return <ErrorBanner msg={error} />
+  const AREAS = [
+    ['our_impr_share', 'Impression share', C.muted],
+    ['our_click_share', 'Click share', C.line],
+    ['our_atc_share', 'Cart-add share', C.warn],
+    ['our_purchase_share', 'Purchase share', C.green],
+  ]
+  return (
+    <div>
+      <div className="controls">
+        <div className="field">
+          <label htmlFor="ms-cat">Category</label>
+          <select id="ms-cat" value={cat} onChange={(e) => setCat(e.target.value)} disabled={loading}>
+            {cats.map((c) => <option key={c}>{c}</option>)}
+          </select>
+        </div>
+        <GrainToggle grain={grain} setGrain={setGrain} />
+        <MonthRange r={mr} grain={grain} /><Fresh period={mr.months[mr.months.length - 1]} grain={grain} />
+      </div>
+      <div className="kpis" style={{ marginBottom: 16 }}>
+        <div className="kpi"><div className="v">{loading ? '…' : pct(last.our_impr_share)}</div><div className="l">Impression share (latest)</div></div>
+        <div className="kpi"><div className="v">{loading ? '…' : pct(last.our_click_share)}</div><div className="l">Click share</div></div>
+        <div className="kpi"><div className="v">{loading ? '…' : pct(last.our_atc_share)}</div><div className="l">Cart-add share</div></div>
+        <div className="kpi"><div className="v">{loading ? '…' : pct(last.our_purchase_share)}</div><div className="l">Purchase share</div></div>
+      </div>
+      <div className="card">
+        <h3>Our market share by funnel stage — {cat} ({region})</h3>
+        {loading ? <SkelChart /> : !series.length ? <Empty /> : (
+          <ResponsiveContainer width="100%" height={380}>
+            <AreaChart data={series} margin={{ left: -4 }}>
+              <defs>
+                {AREAS.map(([key, , col]) => (
+                  <linearGradient key={key} id={`ms-${key}`} x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={col} stopOpacity={0.35} />
+                    <stop offset="100%" stopColor={col} stopOpacity={0.04} />
+                  </linearGradient>
+                ))}
+              </defs>
+              <CartesianGrid stroke={C.grid} strokeDasharray="3 3" />
+              <XAxis dataKey="month" tick={axisTick} tickFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
+              <YAxis tickFormatter={(v) => (v * 100).toFixed(0) + '%'} tick={axisTick} />
+              <Tooltip formatter={(v) => pct(v)} contentStyle={tipStyle} labelFormatter={grain === 'week' ? (k) => fmtWeek(k) : undefined} />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              {AREAS.map(([key, name, col]) => (
+                <Area key={key} type="monotone" dataKey={key} name={name} stroke={col}
+                      strokeWidth={key === 'our_purchase_share' ? 2.4 : 1.4}
+                      fill={`url(#ms-${key})`} isAnimationActive={!REDUCED} />
+              ))}
+            </AreaChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+      <div className="muted small" style={{ marginTop: 10 }}>
+        Share = our ASINs’ count ÷ the market total on the same search queries, at each funnel stage
+        (impression → click → cart-add → purchase). This is our share across the demand our ASINs
+        appear on (the SQP query set), not the full subcategory.
+      </div>
+    </div>
+  )
+}
+
+/* ---------------- Competition Watch (WS3 — subcategory market share incl. competitors, via Keepa) ---------------- */
+function CompetitionWatch({ region }) {
+  const { rows: brands, loading, error } = useRows('competition_brand', { region })
+  const cats = useMemo(() => [...new Set(brands.map((r) => r.category))].sort(), [brands])
+  const [cat, setCat] = useState('')
+  useEffect(() => { if (cats.length && !cats.includes(cat)) setCat(cats[0]) }, [cats]) // eslint-disable-line
+  const rows = useMemo(() => brands.filter((r) => r.category === cat).sort((a, b) => (b.share || 0) - (a.share || 0)), [brands, cat])
+  const top = rows.slice(0, 15)
+  const ours = rows.find((r) => r.is_ours)
+  const mktUnits = useMemo(() => rows.reduce((s, r) => s + (r.units_monthly || 0), 0), [rows])
+  const updated = rows[0]?.updated
+  if (error) return <ErrorBanner msg={error} />
+  return (
+    <div>
+      <div className="controls">
+        <div className="field">
+          <label htmlFor="cw-cat">Subcategory</label>
+          <select id="cw-cat" value={cat} onChange={(e) => setCat(e.target.value)} disabled={loading}>
+            {cats.map((c) => <option key={c}>{c}</option>)}
+          </select>
+        </div>
+        {updated && <span className="muted small">Keepa units/mo · updated {updated}</span>}
+      </div>
+      <div className="kpis" style={{ marginBottom: 16 }}>
+        <div className="kpi"><div className="v">{loading ? '…' : (ours ? '#' + ours.rnk : '—')}</div><div className="l">Our rank in subcategory</div></div>
+        <div className="kpi"><div className="v">{loading ? '…' : (ours ? pct(ours.share) : '—')}</div><div className="l">Our market share (units)</div></div>
+        <div className="kpi"><div className="v">{loading ? '…' : num(rows.length)}</div><div className="l">Brands tracked</div></div>
+        <div className="kpi"><div className="v">{loading ? '…' : num(mktUnits)}</div><div className="l">Subcategory units / mo</div></div>
+      </div>
+      <div className="card">
+        <h3>Brand market share — {cat} ({region})</h3>
+        {loading ? <SkelChart /> : !top.length ? <Empty /> : (
+          <ResponsiveContainer width="100%" height={Math.max(220, top.length * 28)}>
+            <BarChart data={top} layout="vertical" margin={{ left: 50, right: 30 }}>
+              <CartesianGrid stroke={C.grid} strokeDasharray="3 3" horizontal={false} />
+              <XAxis type="number" tickFormatter={(v) => (v * 100).toFixed(0) + '%'} tick={axisTick} />
+              <YAxis type="category" dataKey="brand" width={140} tick={{ fontSize: 11, fill: C.axis }} />
+              <Tooltip formatter={(v) => pct(v)} contentStyle={tipStyle} />
+              <Bar dataKey="share" radius={[0, 4, 4, 0]} isAnimationActive={!REDUCED}>
+                {top.map((r, i) => <Cell key={i} fill={r.is_ours ? C.line : '#cdd6d3'} />)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+      <div className="card">
+        <h3>Brands in {cat}</h3>
+        <table>
+          <thead><tr><th>#</th><th>Brand</th><th className="num">Share</th><th className="num">Units / mo</th><th className="num">ASINs</th></tr></thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.brand} style={r.is_ours ? { background: '#e6f1ee' } : undefined}>
+                <td>{r.rnk}</td>
+                <td>{r.brand}{r.is_ours && <span className="pill good" style={{ marginLeft: 6 }}>OURS</span>}</td>
+                <td className="num">{pct(r.share)}</td><td className="num">{num(r.units_monthly)}</td><td className="num">{r.asin_count}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="muted small" style={{ marginTop: 10 }}>
+        Units/mo = Keepa <code>monthlySold</code> (an estimate) summed by brand across the subcategory's top sellers; share = brand units ÷ tracked subcategory units. Competitor set = Keepa category best-sellers + our catalog. Directional, not exact.
       </div>
     </div>
   )
@@ -782,9 +926,9 @@ function FamilyExplorer({ region }) {
 }
 
 /* ---------------- Ads (paid, by family) — Canada only ---------------- */
-function AdsExplorer() {
+function AdsExplorer({ region }) {
   const [grain, setGrain] = useState('month')
-  const { rows: famRaw, loading, error } = useRows(`v_ad_family_${grain}`, { region: 'CA' })
+  const { rows: famRaw, loading, error } = useRows(`v_ad_family_${grain}`, { region })
   const fam = useMemo(() => grain === 'week' ? famRaw.map((r) => ({ ...r, month: r.week })) : famRaw, [famRaw, grain])
   const [prog, setProg] = useState('All')
   const months = useMemo(() => [...new Set(fam.map((r) => r.month))].sort(), [fam])
@@ -808,14 +952,14 @@ function AdsExplorer() {
   const tot = scope.reduce((s, r) => ({ spend: s.spend + (r.spend || 0), sales: s.sales + (r.sales || 0), orders: s.orders + (r.orders || 0) }), { spend: 0, sales: 0, orders: 0 })
 
   // deep-dive: keyword (search-term) level for the selected family
-  const { rows: termsRaw, loading: tl } = useRows(grain === 'week' ? 'v_ad_term_enriched_week' : 'v_ad_term_enriched', family ? { region: 'CA', family } : { region: 'CA', family: '__none__' })
+  const { rows: termsRaw, loading: tl } = useRows(grain === 'week' ? 'v_ad_term_enriched_week' : 'v_ad_term_enriched', family ? { region, family } : { region, family: '__none__' })
   const terms = useMemo(() => grain === 'week' ? termsRaw.map((r) => ({ ...r, month: r.week })) : termsRaw, [termsRaw, grain])
   // placement / advertised-child / SD detail — weekly twins added in Sprint W3 (alias week→month)
-  const { rows: plcRaw } = useRows(`v_placement_family_${grain}`, { region: 'CA' })
+  const { rows: plcRaw } = useRows(`v_placement_family_${grain}`, { region })
   const plc = useMemo(() => grain === 'week' ? plcRaw.map((r) => ({ ...r, month: r.week })) : plcRaw, [plcRaw, grain])
-  const { rows: adasinRaw } = useRows(`v_ad_asin_${grain}`, { region: 'CA' })
+  const { rows: adasinRaw } = useRows(`v_ad_asin_${grain}`, { region })
   const adasin = useMemo(() => grain === 'week' ? adasinRaw.map((r) => ({ ...r, month: r.week })) : adasinRaw, [adasinRaw, grain])
-  const { rows: sdRaw } = useRows(`v_sd_${grain}`, { region: 'CA' })
+  const { rows: sdRaw } = useRows(`v_sd_${grain}`, { region })
   const sd = useMemo(() => grain === 'week' ? sdRaw.map((r) => ({ ...r, month: r.week })) : sdRaw, [sdRaw, grain])
   const kf = useKwFilter()
   const kwAgg = useMemo(() => {
@@ -884,11 +1028,11 @@ function AdsExplorer() {
         <div className="field"><label htmlFor="ad-fam">Family</label>
           <select id="ad-fam" value={family} onChange={(e) => setFamily(e.target.value)}>{families.map((f) => <option key={f}>{f}</option>)}</select></div>
         <MonthRange r={mr} grain={grain} /><Fresh period={mr.months[mr.months.length - 1]} grain={grain} />
-        <span className="muted small" style={{ alignSelf: 'flex-end' }}>Canada · Vendor Central ads{grain === 'week' && months.length ? ` · weekly from ${fmtWeek(months[0])}` : ''}</span>
+        <span className="muted small" style={{ alignSelf: 'flex-end' }}>{rlabel(region)} · Vendor Central ads{grain === 'week' && months.length ? ` · weekly from ${fmtWeek(months[0])}` : ''}</span>
       </div>
       <div className="kpis" style={{ marginBottom: 16 }}>
-        <div className="kpi"><div className="v">{loading ? '…' : money(tot.spend, 'CA')}</div><div className="l">Ad spend · {family}</div></div>
-        <div className="kpi"><div className="v">{loading ? '…' : money(tot.sales, 'CA')}</div><div className="l">Ad sales</div></div>
+        <div className="kpi"><div className="v">{loading ? '…' : money(tot.spend, region)}</div><div className="l">Ad spend · {family}</div></div>
+        <div className="kpi"><div className="v">{loading ? '…' : money(tot.sales, region)}</div><div className="l">Ad sales</div></div>
         <div className="kpi"><div className="v">{loading ? '…' : (tot.sales ? (tot.spend / tot.sales * 100).toFixed(0) + '%' : '—')}</div><div className="l">ACOS</div></div>
         <div className="kpi"><div className="v">{loading ? '…' : (tot.spend ? (tot.sales / tot.spend).toFixed(1) + 'x' : '—')}</div><div className="l">ROAS</div></div>
         <div className="kpi"><div className="v">{loading ? '…' : num(tot.orders)}</div><div className="l">Ad orders</div></div>
@@ -917,8 +1061,8 @@ function AdsExplorer() {
             </tr></thead>
             <tbody>{famS.sorted.map((r) => (
               <tr key={r.family} className="rowbtn" style={{ background: r.family === family ? 'var(--panel2)' : undefined }} onClick={() => setFamily(r.family)}>
-                <td><b>{r.family}</b></td><td className="num">{money(r.spend, 'CA')}</td>
-                <td className="num">{money(r.sales, 'CA')}</td>
+                <td><b>{r.family}</b></td><td className="num">{money(r.spend, region)}</td>
+                <td className="num">{money(r.sales, region)}</td>
                 <td className="num"><span className={'badge ' + (r.acos > 0.25 ? 'down' : r.acos ? 'up' : 'flat')}>{r.acos ? (r.acos * 100).toFixed(0) + '%' : '—'}</span></td>
                 <td className="num">{r.roas ? r.roas.toFixed(1) + 'x' : '—'}</td>
                 <td className="num">{r.halo == null ? '—' : pct(r.halo)}</td>
@@ -947,11 +1091,11 @@ function AdsExplorer() {
             <tbody>{kwSorted.slice(0, 400).map((r) => (
               <tr key={r.keyword}>
                 <td><b>{r.keyword}</b></td>
-                <td className="num">{money(r.spend, 'CA')}</td>
-                <td className="num">{money(r.sales, 'CA')}</td>
+                <td className="num">{money(r.spend, region)}</td>
+                <td className="num">{money(r.sales, region)}</td>
                 <td className="num"><span className={'badge ' + (r.acos > 0.25 ? 'down' : r.acos ? 'up' : 'flat')}>{r.acos ? (r.acos * 100).toFixed(0) + '%' : '—'}</span></td>
                 <td className="num">{r.roas ? r.roas.toFixed(1) + 'x' : '—'}</td>
-                <td className="num muted">{r.cpc ? money(r.cpc, 'CA') : '—'}</td>
+                <td className="num muted">{r.cpc ? money(r.cpc, region) : '—'}</td>
                 <td className="num">{r.halo == null ? '—' : pct(r.halo)}</td>
                 <td className="num muted">{num(r.orders)}</td>
                 <td className="num">{r.sqp_volume == null ? '-' : num(r.sqp_volume)}</td>
@@ -970,7 +1114,7 @@ function AdsExplorer() {
             <tbody>{plcAgg.map((r) => (
               <tr key={r.placement}>
                 <td><b>{r.placement || '—'}</b></td>
-                <td className="num">{money(r.spend, 'CA')}</td>
+                <td className="num">{money(r.spend, region)}</td>
                 <td className="num">{pct(r.share)}</td>
                 <td className="num"><span className={'badge ' + (r.acos > 0.25 ? 'down' : r.acos ? 'up' : 'flat')}>{r.acos ? (r.acos * 100).toFixed(0) + '%' : '—'}</span></td>
                 <td className="num muted">{num(r.orders)}</td>
@@ -989,7 +1133,7 @@ function AdsExplorer() {
                 <td className="num muted">{num(r.clicks)}</td>
                 <td className="num">{num(r.orders)}</td>
                 <td className="num">{r.cvr == null ? '—' : pct(r.cvr)}</td>
-                <td className="num">{money(r.spend, 'CA')}</td>
+                <td className="num">{money(r.spend, region)}</td>
                 <td className="num">{r.halo == null ? '—' : pct(r.halo)}</td>
               </tr>))}
             </tbody></table></div>)}
@@ -997,8 +1141,8 @@ function AdsExplorer() {
       </div>)}
       <div className="card"><h3>Sponsored Display · account <span className="muted small">upper funnel — new-to-brand, DPV, ATC (selected {grain === 'week' ? 'weeks' : 'months'})</span></h3>
         <div className="kpis">
-          <div className="kpi"><div className="v">{money(sdAgg.spend, 'CA')}</div><div className="l">SD spend</div></div>
-          <div className="kpi"><div className="v">{money(sdAgg.sales, 'CA')}</div><div className="l">SD sales</div></div>
+          <div className="kpi"><div className="v">{money(sdAgg.spend, region)}</div><div className="l">SD spend</div></div>
+          <div className="kpi"><div className="v">{money(sdAgg.sales, region)}</div><div className="l">SD sales</div></div>
           <div className="kpi"><div className="v">{sdAgg.acos != null ? (sdAgg.acos * 100).toFixed(0) + '%' : '—'}</div><div className="l">ACOS</div></div>
           <div className="kpi"><div className="v">{sdAgg.ntb != null ? pct(sdAgg.ntb) : '—'}</div><div className="l">New-to-brand %</div></div>
           <div className="kpi"><div className="v">{num(sdAgg.dpv)}</div><div className="l">Detail-page views</div></div>
@@ -1014,12 +1158,12 @@ function AdsExplorer() {
 const daysInMonth = (mm) => { if (!mm) return 30; const [y, mo] = String(mm).split('-').map(Number); return new Date(y, mo, 0).getDate() }
 // current (in-progress) ISO Monday week-start as 'YYYY-MM-DD' — the weekly analogue of the current month
 const curWeekStart = () => { const x = new Date(); const day = (x.getUTCDay() + 6) % 7; x.setUTCDate(x.getUTCDate() - day); return x.toISOString().slice(0, 10) }
-function TacosExplorer() {
+function TacosExplorer({ region }) {
   const [grain, setGrain] = useState('month')
   const PL = grain === 'week' ? 'weeks' : 'months'
-  const { rows: rowsRaw, loading, error } = useRows(`v_tacos_family_${grain}`, { region: 'CA' })
+  const { rows: rowsRaw, loading, error } = useRows(`v_tacos_family_${grain}`, { region })
   const rows = useMemo(() => grain === 'week' ? rowsRaw.map((r) => ({ ...r, month: r.week })) : rowsRaw, [rowsRaw, grain])
-  const { rows: tgtRows } = useRows('targets', { region: 'CA' })
+  const { rows: tgtRows } = useRows('targets', { region })
   const [ceiling, setCeiling] = useState(22)                 // % — course default; overridden by an Account TACOS target if one is set
   const cf = (Number(ceiling) || 0) / 100
   // current (in-progress) period, excluded from "closed": current calendar month (monthly) or current week (weekly)
@@ -1087,13 +1231,13 @@ function TacosExplorer() {
         <div className="field"><label htmlFor="tacos-ceil">TACOS ceiling %</label>
           <input id="tacos-ceil" type="number" min="0" max="100" step="0.5" value={ceiling}
                  onChange={(e) => { const v = e.target.value; setCeiling(v === '' ? '' : Math.max(0, Math.min(100, Number(v) || 0))) }} style={{ width: 90 }} /></div>
-        <span className="muted small" style={{ alignSelf: 'flex-end' }}>Canada · Vendor Central{grain === 'week' && months.length ? ` · weekly from ${fmtWeek(months[0])}` : ''}</span>
+        <span className="muted small" style={{ alignSelf: 'flex-end' }}>{rlabel(region)} · Vendor Central{grain === 'week' && months.length ? ` · weekly from ${fmtWeek(months[0])}` : ''}</span>
       </div>
       <div className="kpis" style={{ marginBottom: 16 }}>
-        <div className="kpi"><div className="v">{loading ? '…' : money(last.sales, 'CA')}</div><div className="l">Total sales · {fmtPeriod(grain, last.month) || `latest ${grain === 'week' ? 'wk' : 'mo'}`}</div></div>
-        <div className="kpi"><div className="v">{loading ? '…' : money(last.spend, 'CA')}</div><div className="l">Ad spend</div></div>
+        <div className="kpi"><div className="v">{loading ? '…' : money(last.sales, region)}</div><div className="l">Total sales · {fmtPeriod(grain, last.month) || `latest ${grain === 'week' ? 'wk' : 'mo'}`}</div></div>
+        <div className="kpi"><div className="v">{loading ? '…' : money(last.spend, region)}</div><div className="l">Ad spend</div></div>
         <div className="kpi"><div className="v">{loading ? '…' : (last.tacos != null ? pct(last.tacos) : '—')}</div><div className="l">TACOS (vs {ceiling}% ceiling)</div></div>
-        <div className="kpi"><div className="v">{loading ? '…' : (headroomDay != null ? money(headroomDay, 'CA') + '/day' : '—')}</div><div className="l">Reinvest room/day · {fmtPeriod(grain, last.month) || `last ${grain === 'week' ? 'wk' : 'mo'}`}</div></div>
+        <div className="kpi"><div className="v">{loading ? '…' : (headroomDay != null ? money(headroomDay, region) + '/day' : '—')}</div><div className="l">Reinvest room/day · {fmtPeriod(grain, last.month) || `last ${grain === 'week' ? 'wk' : 'mo'}`}</div></div>
       </div>
       <div className="card"><h3>Account TACOS vs ceiling</h3>
         {loading ? <SkelChart /> : !series.length ? <Empty /> : (
@@ -1121,11 +1265,11 @@ function TacosExplorer() {
             <tbody>{fs.sorted.map((r) => (
               <tr key={r.family}>
                 <td><b>{r.family}</b></td>
-                <td className="num">{money(r.sales, 'CA')}</td>
-                <td className="num">{money(r.spend, 'CA')}</td>
+                <td className="num">{money(r.sales, region)}</td>
+                <td className="num">{money(r.spend, region)}</td>
                 <td className="num"><span className={'badge ' + (r.tacos == null ? 'flat' : r.tacos <= cf ? 'up' : 'down')}>{r.tacos == null ? '—' : pct(r.tacos)}</span></td>
                 <td className="num muted">{r.acos == null ? '—' : pct(r.acos)}</td>
-                <td className="num">{r.headroom == null ? '—' : money(r.headroom, 'CA')}</td>
+                <td className="num">{r.headroom == null ? '—' : money(r.headroom, region)}</td>
               </tr>))}
             </tbody></table></div>)}
         <div className="muted small" style={{ marginTop: 8 }}><b>Headroom</b> = (ceiling − TACOS) × sales — the extra ad budget a family can absorb over the selected {PL} and still finish under the ceiling. Green TACOS = under ceiling (room to scale); red = over (rein in). Covers catalogued families (~96% of account sales). Margin isn't shown (retail COGS here is Amazon's cost, not LifePro's — use the Blended sheet).</div>
@@ -1137,11 +1281,11 @@ function TacosExplorer() {
             const sPct = r.salesTgt ? r.salesAct / r.salesTgt : null, bPct = r.ppcTgt ? r.ppcAct / r.ppcTgt : null
             return (<tr key={r.scope}>
               <td><b>{r.scope}</b></td>
-              <td className="num">{money(r.salesAct, 'CA')}</td>
-              <td className="num muted">{r.salesTgt ? money(r.salesTgt, 'CA') : '—'}</td>
+              <td className="num">{money(r.salesAct, region)}</td>
+              <td className="num muted">{r.salesTgt ? money(r.salesTgt, region) : '—'}</td>
               <td className="num"><span className={'badge ' + (sPct == null ? 'flat' : sPct >= 1 ? 'up' : sPct >= 0.9 ? 'flat' : 'down')}>{sPct == null ? '—' : pct(sPct)}</span></td>
-              <td className="num">{money(r.ppcAct, 'CA')}</td>
-              <td className="num muted">{r.ppcTgt ? money(r.ppcTgt, 'CA') : '—'}</td>
+              <td className="num">{money(r.ppcAct, region)}</td>
+              <td className="num muted">{r.ppcTgt ? money(r.ppcTgt, region) : '—'}</td>
               <td className="num"><span className={'badge ' + (bPct == null ? 'flat' : bPct <= 1 ? 'up' : 'down')}>{bPct == null ? '—' : pct(bPct)}</span></td>
               <td className="num">{r.tacos == null ? '—' : pct(r.tacos)}</td>
               <td className="num"><span className={'badge ' + ((r.tacosTgt == null || r.tacos == null) ? 'flat' : r.tacos <= r.tacosTgt ? 'up' : 'down')}>{r.tacosTgt == null ? '—' : pct(r.tacosTgt)}</span></td>
@@ -1156,13 +1300,13 @@ function TacosExplorer() {
 
 /* ---------------- Optimize (wasted spend + harvest) — Canada only ---------------- */
 const mtLabel = (m) => (m && m.startsWith('TARGETING_EXPRESSION') ? 'Auto' : m || '—')
-function OptimizeExplorer() {
+function OptimizeExplorer({ region }) {
   const [grain, setGrain] = useState('month')
   const PL = grain === 'week' ? 'weeks' : 'months'
   // monthly targeting view is v_targeting_enriched (no _month suffix); weekly is v_targeting_enriched_week
-  const { rows: tgtRaw, loading: tl, error: te } = useRows(grain === 'week' ? 'v_targeting_enriched_week' : 'v_targeting_enriched', { region: 'CA' })
+  const { rows: tgtRaw, loading: tl, error: te } = useRows(grain === 'week' ? 'v_targeting_enriched_week' : 'v_targeting_enriched', { region })
   const tgt = useMemo(() => grain === 'week' ? tgtRaw.map((r) => ({ ...r, month: r.week })) : tgtRaw, [tgtRaw, grain])
-  const { rows: harvest, loading: hl, error: he } = useRows('v_ad_harvest', { region: 'CA' })  // lifetime (grain-independent)
+  const { rows: harvest, loading: hl, error: he } = useRows('v_ad_harvest', { region })  // lifetime (grain-independent)
   const months = useMemo(() => [...new Set(tgt.map((r) => r.month))].sort(), [tgt])
   const mr = useMonthRange(months)
   const wasted = useMemo(() => {
@@ -1187,13 +1331,13 @@ function OptimizeExplorer() {
       <div className="controls">
         <GrainToggle grain={grain} setGrain={setGrain} />
         <MonthRange r={mr} grain={grain} /><Fresh period={mr.months[mr.months.length - 1]} grain={grain} />
-        <span className="muted small" style={{ alignSelf: 'flex-end' }}>Canada · Sponsored Products{grain === 'week' && months.length ? ` · weekly from ${fmtWeek(months[0])}` : ''}</span>
+        <span className="muted small" style={{ alignSelf: 'flex-end' }}>{rlabel(region)} · Sponsored Products{grain === 'week' && months.length ? ` · weekly from ${fmtWeek(months[0])}` : ''}</span>
       </div>
       <div className="kpis" style={{ marginBottom: 16 }}>
-        <div className="kpi"><div className="v">{tl ? '…' : money(totWasted, 'CA')}</div><div className="l">Wasted spend (range)</div></div>
+        <div className="kpi"><div className="v">{tl ? '…' : money(totWasted, region)}</div><div className="l">Wasted spend (range)</div></div>
         <div className="kpi"><div className="v">{tl ? '…' : num(wasted.length)}</div><div className="l">Zero-order targets</div></div>
         <div className="kpi"><div className="v">{hl ? '…' : num(harv.length)}</div><div className="l">Harvest candidates</div></div>
-        <div className="kpi"><div className="v">{hl ? '…' : money(totHarvSales, 'CA')}</div><div className="l">Harvest sales (all-time)</div></div>
+        <div className="kpi"><div className="v">{hl ? '…' : money(totHarvSales, region)}</div><div className="l">Harvest sales (all-time)</div></div>
       </div>
       <div className="card"><h3>Wasted spend — targets with spend &amp; zero orders <span className="muted small">({wS.sorted.length}) · selected {PL}</span></h3>
         {tl ? <SkelRows n={10} /> : !wS.sorted.length ? <Empty msg="No zero-order spend in range — clean." /> : (
@@ -1213,9 +1357,9 @@ function OptimizeExplorer() {
                 <td className="small muted" style={{ maxWidth: 220 }}>{r.campaign || '—'}</td>
                 <td><b>{r.targeting}</b></td>
                 <td className="small muted">{mtLabel(r.match_type)}</td>
-                <td className="num"><span className="badge down">{money(r.spend, 'CA')}</span></td>
+                <td className="num"><span className="badge down">{money(r.spend, region)}</span></td>
                 <td className="num muted">{num(r.clicks)}</td>
-                <td className="num muted">{r.bid == null ? '—' : money(r.bid, 'CA')}</td>
+                <td className="num muted">{r.bid == null ? '—' : money(r.bid, region)}</td>
               </tr>))}
             </tbody></table></div>)}
         <div className="muted small" style={{ marginTop: 8 }}>Spend with <b>0 orders</b> over the selected {PL} — negate the search term or drop the target. “Auto” = auto/predefined targeting.<Cap n={wS.sorted.length} cap={400} /></div>
@@ -1236,8 +1380,8 @@ function OptimizeExplorer() {
                 <td><b>{r.term}</b></td>
                 <td className="small muted">{r.family}</td>
                 <td className="num">{num(r.orders)}</td>
-                <td className="num">{money(r.sales, 'CA')}</td>
-                <td className="num muted">{money(r.spend, 'CA')}</td>
+                <td className="num">{money(r.sales, region)}</td>
+                <td className="num muted">{money(r.spend, region)}</td>
                 <td className="num"><span className={'badge ' + (r.acos > 0.25 ? 'down' : r.acos ? 'up' : 'flat')}>{r.acos ? (r.acos * 100).toFixed(0) + '%' : '—'}</span></td>
               </tr>))}
             </tbody></table></div>)}
@@ -1255,22 +1399,22 @@ const REC_TAB_LABEL = { opt: 'Optimize', ranks: 'Organic Ranks', tacos: 'TACOS',
 const recBadge = (t) => 'badge ' + (t === 'cut' || t === 'trim' ? 'down' : t === 'reinvest' || t === 'harvest' ? 'up' : 'flat')
 // Shared recommendation engine — used by the Recommendations tab AND the Dashboard action strip.
 // Returns the full reasoned rec list (+ account ACoS benchmark, account TACOS, the range hook) for `grain`.
-function useRecs(grain) {
+function useRecs(grain, region) {
   // Thresholds from the SQP-Research playbook (2026-10-21, CA data — ~/Downloads/SQP-Research/paper.md):
   // cut at 20 clicks/0 orders (K1), bid rebuild at ≥2× account ACoS (B3), maintenance pull-back only at organic rank 1–3 (K5),
   // TACOS tiers scale <6% / hold 6–12% / trim ≥12% in ±15% steps (F1–F3), stop raising Top of Search above 65% of spend (P2).
   const CUT_CLK = 20, HARVEST_MIN = 5, RECOVER_RANK = 3, RECOVER_MIN = 100, TAC_SCALE = 0.06, TAC_TRIM = 0.12, TAC_STEP = 0.15, TAC_MIN = 300,
     REBUILD = 2, PLC_GAP = 0.03, PLC_MIN = 200, TOS_SHIFT = 0.6, TOS_CAP = 0.65, VAR_MINCLK = 20, VAR_GAP = 0.02
   // monthly targeting view has no _month suffix; the others follow v_X_${grain}. Harvest + rank are lifetime.
-  const { rows: tgtRaw, loading: l1 } = useRows(grain === 'week' ? 'v_targeting_enriched_week' : 'v_targeting_enriched', { region: 'CA' })
+  const { rows: tgtRaw, loading: l1 } = useRows(grain === 'week' ? 'v_targeting_enriched_week' : 'v_targeting_enriched', { region })
   const tgt = useMemo(() => grain === 'week' ? tgtRaw.map((r) => ({ ...r, month: r.week })) : tgtRaw, [tgtRaw, grain])
-  const { rows: harvest, loading: l2 } = useRows('v_ad_harvest', { region: 'CA' })       // lifetime
-  const { rows: rankkw, loading: l3 } = useRows('v_rank_kw_enriched', { region: 'CA' })   // lifetime
-  const { rows: tacRaw, loading: l4 } = useRows(`v_tacos_family_${grain}`, { region: 'CA' })
+  const { rows: harvest, loading: l2 } = useRows('v_ad_harvest', { region })       // lifetime
+  const { rows: rankkw, loading: l3 } = useRows('v_rank_kw_enriched', { region })   // lifetime
+  const { rows: tacRaw, loading: l4 } = useRows(`v_tacos_family_${grain}`, { region })
   const tac = useMemo(() => grain === 'week' ? tacRaw.map((r) => ({ ...r, month: r.week })) : tacRaw, [tacRaw, grain])
-  const { rows: plcRaw, loading: l5 } = useRows(`v_placement_family_${grain}`, { region: 'CA' })
+  const { rows: plcRaw, loading: l5 } = useRows(`v_placement_family_${grain}`, { region })
   const plc = useMemo(() => grain === 'week' ? plcRaw.map((r) => ({ ...r, month: r.week })) : plcRaw, [plcRaw, grain])
-  const { rows: adasinRaw, loading: l6 } = useRows(`v_ad_asin_${grain}`, { region: 'CA' })
+  const { rows: adasinRaw, loading: l6 } = useRows(`v_ad_asin_${grain}`, { region })
   const adasin = useMemo(() => grain === 'week' ? adasinRaw.map((r) => ({ ...r, month: r.week })) : adasinRaw, [adasinRaw, grain])
   const loading = l1 || l2 || l3 || l4 || l5 || l6
   const months = useMemo(() => [...new Set(tgt.map((r) => r.month))].sort(), [tgt])
@@ -1299,7 +1443,7 @@ function useRecs(grain) {
     return Object.values(m).filter((x) => x.orders === 0 && x.clicks >= CUT_CLK).map((x) => ({
       type: 'cut', family: x.family || '—', impact: x.spend,
       action: `Negate “${x.targeting}” (${mtLabel(x.match)})${x.campaign ? ` in ${x.campaign}` : ''}`,
-      reason: `${num(x.clicks)} clicks · 0 orders · ${money(x.spend, 'CA')} spent — terms past ${CUT_CLK} clicks with no order keep running ~2× account ACoS (${benchPct})` }))
+      reason: `${num(x.clicks)} clicks · 0 orders · ${money(x.spend, region)} spent — terms past ${CUT_CLK} clicks with no order keep running ~2× account ACoS (${benchPct})` }))
   }, [tgt, mr.from, mr.to, benchPct])
 
   // Bid optimization: efficient targets (ACoS well below account) → scale up; inefficient (well above) → trim
@@ -1314,7 +1458,7 @@ function useRecs(grain) {
     const out = []
     Object.values(m).forEach((x) => {
       if (!x.sales || x.orders < 3) return          // need real conversions to judge a bid
-      const acos = x.spend / x.sales; const now = x.bid ? ` — now ${money(x.bid, 'CA')}` : ''
+      const acos = x.spend / x.sales; const now = x.bid ? ` — now ${money(x.bid, region)}` : ''
       if (acos < accBench * 0.75 && x.spend >= 30)
         out.push({ type: 'bid', family: x.family || '—', impact: Math.max(0, accBench * x.sales - x.spend),   // absorbable headroom at benchmark
           action: `Increase bid on “${x.targeting}” (${mtLabel(x.match)})${now}`,
@@ -1335,13 +1479,13 @@ function useRecs(grain) {
     const acos = h.sales ? h.spend / h.sales : null
     return { type: 'harvest', family: h.family || '—', impact: h.sales || 0,
       action: `Add “${h.term}” as an exact target`,
-      reason: `${num(h.orders)} orders · ${money(h.sales, 'CA')} sales${acos != null ? ` · ACoS ${(acos * 100).toFixed(0)}% vs account ${benchPct}` : ''} · not yet exact` }
+      reason: `${num(h.orders)} orders · ${money(h.sales, region)} sales${acos != null ? ` · ACoS ${(acos * 100).toFixed(0)}% vs account ${benchPct}` : ''} · not yet exact` }
   }), [harvest, benchPct])
 
   const recovers = useMemo(() => rankkw.filter((r) => r.latest_rank != null && r.latest_rank <= RECOVER_RANK && (r.ad_spend || 0) >= RECOVER_MIN).map((r) => ({
     type: 'recover', family: r.family || '—', impact: 0.5 * (r.ad_spend || 0),   // spend saved by halving
     action: `Cut ads ≥50% on “${r.keyword}”`,
-    reason: `ranks #${r.latest_rank} organically · still ${money(r.ad_spend, 'CA')} in ads · rank 1–3 terms held the top 10 after ads were halved — restore if rank slips to 8+` })), [rankkw])
+    reason: `ranks #${r.latest_rank} organically · still ${money(r.ad_spend, region)} in ads · rank 1–3 terms held the top 10 after ads were halved — restore if rank slips to 8+` })), [rankkw])
 
   // TACOS tiers: marginal total ROAS of extra spend ≈ 4.9× below 6% TACOS, 3.5× at 6–12%, 2.6× above 12% (long-run, CA)
   const { reinvests, trims } = useMemo(() => {
@@ -1406,9 +1550,9 @@ function useRecs(grain) {
   return { all, benchPct, accBench, loading, mr, months, accountTacos }
 }
 
-function RecommendationsExplorer({ onNav }) {
+function RecommendationsExplorer({ region, onNav }) {
   const [grain, setGrain] = useState('month')
-  const { all, benchPct, loading, mr } = useRecs(grain)
+  const { all, benchPct, loading, mr } = useRecs(grain, region)
   const [typeF, setTypeF] = useState('all'); const [familyF, setFamilyF] = useState('All')
   const families = useMemo(() => ['All', ...[...new Set(all.map((r) => r.family))].filter((f) => f && f !== '—').sort()], [all])
   const shown = useMemo(() => all.filter((r) => (typeF === 'all' || r.type === typeF) && (familyF === 'All' || r.family === familyF)), [all, typeF, familyF])
@@ -1423,11 +1567,11 @@ function RecommendationsExplorer({ onNav }) {
         <div className="field"><label htmlFor="rec-fam">Family</label>
           <select id="rec-fam" value={familyF} onChange={(e) => setFamilyF(e.target.value)}>{families.map((f) => <option key={f}>{f}</option>)}</select></div>
         <MonthRange r={mr} grain={grain} /><Fresh period={mr.months[mr.months.length - 1]} grain={grain} />
-        <span className="muted small" style={{ alignSelf: 'flex-end' }}>Canada · rule-based (no AI guessing)</span>
+        <span className="muted small" style={{ alignSelf: 'flex-end' }}>{rlabel(region)} · rule-based (no AI guessing)</span>
       </div>
       <div className="kpis" style={{ marginBottom: 16 }}>
         <div className="kpi"><div className="v">{loading ? '…' : num(shown.length)}</div><div className="l">Recommendations</div></div>
-        <div className="kpi"><div className="v">{loading ? '…' : money(atStake, 'CA')}</div><div className="l">C$ at stake (shown)</div></div>
+        <div className="kpi"><div className="v">{loading ? '…' : money(atStake, region)}</div><div className="l">{cur$(region)} at stake (shown)</div></div>
         <div className="kpi"><div className="v">{loading ? '…' : benchPct}</div><div className="l">Account ACoS (benchmark)</div></div>
         <div className="kpi"><div className="v">{loading ? '…' : num(shown.filter((r) => r.type === 'reinvest').length)}</div><div className="l">Reinvest opportunities</div></div>
       </div>
@@ -1436,7 +1580,7 @@ function RecommendationsExplorer({ onNav }) {
           <button key={id} className={'tab' + (typeF === id ? ' active' : '')} role="tab" aria-selected={typeF === id}
                   onClick={() => setTypeF(id)}>{label}{id !== 'all' && <span className="muted small" style={{ marginLeft: 6 }}>{all.filter((r) => r.type === id).length}</span>}</button>))}
       </div>
-      <div className="card"><h3>What to do next <span className="muted small">· action + the numbers behind it · sorted by C$ at stake</span></h3>
+      <div className="card"><h3>What to do next <span className="muted small">· action + the numbers behind it · sorted by {cur$(region)} at stake</span></h3>
         {loading ? <SkelRows n={12} /> : !sorted.length ? <Empty msg="No recommendations for this selection — clean." /> : (
           <div className="table-scroll"><table>
             <thead><tr>
@@ -1444,7 +1588,7 @@ function RecommendationsExplorer({ onNav }) {
               <Th col="family" sort={sort} toggle={toggle}>Family</Th>
               <Th col="action" sort={sort} toggle={toggle}>Recommendation</Th>
               <Th col="reason" sort={sort} toggle={toggle}>Reason</Th>
-              <Th col="impact" sort={sort} toggle={toggle} num>C$ at stake</Th>
+              <Th col="impact" sort={sort} toggle={toggle} num>{cur$(region)} at stake</Th>
               <th aria-label="Act in">Act in</th>
             </tr></thead>
             <tbody>{sorted.slice(0, 500).map((r, i) => (
@@ -1454,26 +1598,26 @@ function RecommendationsExplorer({ onNav }) {
                 <td className="small muted">{r.family}</td>
                 <td><b>{r.action}</b></td>
                 <td className="muted small">{r.reason}</td>
-                <td className="num">{money(r.impact, 'CA')}</td>
+                <td className="num">{money(r.impact, region)}</td>
                 <td className="small" style={{ whiteSpace: 'nowrap', color: 'var(--cyan)' }}>{REC_TAB_LABEL[REC_TAB[r.type]]} →</td>
               </tr>))}
             </tbody></table></div>)}
-        <div className="muted small" style={{ marginTop: 8 }}>Every recommendation is derived from your own data (rule-based — no AI guessing), each reason benchmarked against your account ACoS. <b>C$ at stake</b> = spend saved (Cut/Recover), over-benchmark spend or absorbable headroom (Bid), sales in play (Harvest), one +15% budget step to deploy (Reinvest) or −15% step saved (Trim), est. savings or TOS spend over the 65% cap (Placement), or reallocatable spend (Variation). Thresholds come from the CA SQP-Research playbook (Oct 2026). <b>Harvest &amp; Recover use lifetime data</b>; the selected {grain === 'week' ? 'week' : 'month'} range drives the other types. <b>Click a row</b> to open the tab where you act on it. Canada · Sponsored Products.<Cap n={sorted.length} cap={500} /></div>
+        <div className="muted small" style={{ marginTop: 8 }}>Every recommendation is derived from your own data (rule-based — no AI guessing), each reason benchmarked against your account ACoS. <b>C$ at stake</b> = spend saved (Cut/Recover), over-benchmark spend or absorbable headroom (Bid), sales in play (Harvest), one +15% budget step to deploy (Reinvest) or −15% step saved (Trim), est. savings or TOS spend over the 65% cap (Placement), or reallocatable spend (Variation). Thresholds come from the CA SQP-Research playbook (Oct 2026). <b>Harvest &amp; Recover use lifetime data</b>; the selected {grain === 'week' ? 'week' : 'month'} range drives the other types. <b>Click a row</b> to open the tab where you act on it. {rlabel(region)} · Sponsored Products.<Cap n={sorted.length} cap={500} /></div>
       </div>
     </div>
   )
 }
 
 /* ---------------- Targets (editable: monthly sales target, PPC budget, TACOS target) — Canada ---------------- */
-function TargetsTab() {
+function TargetsTab({ region }) {
   const [rows, setRows] = useState([]); const [loading, setLoading] = useState(true); const [err, setErr] = useState(null)
   const [fams, setFams] = useState(['Account']); const [saved, setSaved] = useState('')
   const monthNow = new Date().toISOString().slice(0, 7)
-  const blank = { region: 'CA', scope: 'Account', month: monthNow, sales_target: '', ppc_budget: '', tacos_target: '' }
+  const blank = { region, scope: 'Account', month: monthNow, sales_target: '', ppc_budget: '', tacos_target: '' }
   const [adding, setAdding] = useState(blank)
-  const load = () => { setLoading(true); fetchAll('targets').then((d) => { setRows(d); setLoading(false) }).catch((e) => { setErr(e.message); setLoading(false) }) }
-  useEffect(load, [])
-  useEffect(() => { fetchAll('catalog', { region: 'CA' }).then((d) => setFams(['Account', ...[...new Set(d.map((r) => r.family).filter(Boolean))].sort()])).catch(() => {}) }, [])
+  const load = () => { setLoading(true); fetchAll('targets', { region }).then((d) => { setRows(d); setLoading(false) }).catch((e) => { setErr(e.message); setLoading(false) }) }
+  useEffect(load, [region]) // eslint-disable-line
+  useEffect(() => { fetchAll('catalog', { region }).then((d) => setFams(['Account', ...[...new Set(d.map((r) => r.family).filter(Boolean))].sort()])).catch(() => {}) }, [region]) // eslint-disable-line
   const { sorted, sort, toggle } = useSort(rows, { col: 'month', dir: 'desc' })
   const flash = (id) => { setSaved(id); setTimeout(() => setSaved(''), 1400) }
   const saveCell = async (row, field, raw) => {
@@ -1506,8 +1650,8 @@ function TargetsTab() {
         <div className="controls" style={{ alignItems: 'flex-end', marginBottom: 0 }}>
           <div className="field"><label>Scope</label><input list="tg-scopes" value={adding.scope} onChange={(e) => setAdding({ ...adding, scope: e.target.value })} placeholder="Account or family" /></div>
           <div className="field"><label>Month</label><input value={adding.month} onChange={(e) => setAdding({ ...adding, month: e.target.value })} placeholder="YYYY-MM" style={{ width: 110 }} /></div>
-          <div className="field"><label>Sales target (C$)</label><input type="number" value={adding.sales_target} onChange={(e) => setAdding({ ...adding, sales_target: e.target.value })} style={{ width: 130 }} /></div>
-          <div className="field"><label>PPC budget (C$)</label><input type="number" value={adding.ppc_budget} onChange={(e) => setAdding({ ...adding, ppc_budget: e.target.value })} style={{ width: 130 }} /></div>
+          <div className="field"><label>Sales target ({cur$(region)})</label><input type="number" value={adding.sales_target} onChange={(e) => setAdding({ ...adding, sales_target: e.target.value })} style={{ width: 130 }} /></div>
+          <div className="field"><label>PPC budget ({cur$(region)})</label><input type="number" value={adding.ppc_budget} onChange={(e) => setAdding({ ...adding, ppc_budget: e.target.value })} style={{ width: 130 }} /></div>
           <div className="field"><label>TACOS target %</label><input type="number" value={adding.tacos_target} onChange={(e) => setAdding({ ...adding, tacos_target: e.target.value })} style={{ width: 110 }} /></div>
           <button className="primary" onClick={addRow}>Add target</button>
         </div>
@@ -1542,13 +1686,13 @@ function TargetsTab() {
 }
 
 /* ---------------- Campaign Map (editable, read-write) ---------------- */
-function CampaignMapping() {
+function CampaignMapping({ region }) {
   const [rows, setRows] = useState([]); const [loading, setLoading] = useState(true); const [err, setErr] = useState(null)
   const [statusF, setStatusF] = useState('needs'); const [q, setQ] = useState(''); const [saved, setSaved] = useState('')
-  const load = () => { setLoading(true); fetchAll('campaign_map', { region: 'CA' })
+  const load = () => { setLoading(true); fetchAll('campaign_map', { region })
     .then((d) => { setRows(d.sort((a, b) => (b.spend || 0) - (a.spend || 0))); setLoading(false) })
     .catch((e) => { setErr(e.message); setLoading(false) }) }
-  useEffect(load, [])
+  useEffect(load, [region]) // eslint-disable-line
   const families = useMemo(() => [...new Set(rows.map((r) => r.manual_family || r.auto_family).filter((x) => x && x !== 'Brand Level'))].sort(), [rows])
   const effOf = (r) => r.manual_family || r.auto_family
   const filtered = useMemo(() => rows.filter((r) => {
@@ -1584,7 +1728,7 @@ function CampaignMapping() {
           </select></div>
       </div>
       <div className="card">
-        <h3>Campaign → Family mapping · Canada {saved && <span className="badge up">saved ✓</span>}</h3>
+        <h3>Campaign → Family mapping · {rlabel(region)} {saved && <span className="badge up">saved ✓</span>}</h3>
         {err && <ErrorBanner msg={err} onRetry={load} />}
         {loading ? <SkelRows n={10} /> : !sorted.length ? <Empty msg="Nothing here." /> : (
           <div className="table-scroll"><table>
@@ -1602,7 +1746,7 @@ function CampaignMapping() {
                 <tr key={r.program + r.campaign_id}>
                   <td style={{ maxWidth: 320 }}><span className="small">{r.campaign_name}</span></td>
                   <td className="small muted">{r.program}</td>
-                  <td className="num">{money(r.spend, 'CA')}</td>
+                  <td className="num">{money(r.spend, region)}</td>
                   <td className="small muted">{r.asin || '—'}</td>
                   <td className="small">{r.auto_family === 'Brand Level' ? <span className="badge flat">Brand Level</span> : r.auto_family || <span className="badge down">none</span>}</td>
                   <td>
@@ -1849,17 +1993,19 @@ export default function App() {
   // grouped nav (Sprint 10): Overview / Market & Organic / Paid / Setup. Recommendations leads the Paid group.
   const NAV_GROUPS = [
     ['Overview', [['dash', 'Dashboard']]],
-    ['Market & Organic', [['keyword', 'Keyword Explorer'], ['family', 'Family Explorer'], ['cats', 'Categories'], ['asin', 'ASIN Explorer'], ['ranks', 'Organic Ranks']]],
+    ['Market & Organic', [['mktshare', 'Market Share'], ['compwatch', 'Competition Watch'], ['keyword', 'Keyword Explorer'], ['family', 'Family Explorer'], ['cats', 'Categories'], ['asin', 'ASIN Explorer'], ['ranks', 'Organic Ranks']]],
     ['Paid', [['rec', 'Recommendations'], ['ads', 'Ads'], ['tacos', 'TACOS'], ['opt', 'Optimize'], ['tgts', 'Targets'], ['map', 'Campaign Map']]],
     ['Setup', [['catalog', 'Catalog'], ['dl', 'Downloads']]],
   ]
-  // paid tabs are CA-only (Reason = Canada Vendor Central); the Market selector doesn't apply there.
-  const CA_ONLY_TABS = ['ads', 'tacos', 'opt', 'rec', 'map', 'tgts']
+  // US + CA parity: paid tabs now load per-region (US ads loaded from the USA Reason DB).
+  const CA_ONLY_TABS = []
   const caOnly = CA_ONLY_TABS.includes(tab)
   const SI = (d) => <svg viewBox="0 0 24 24"><path d={d} /></svg>
   const ICONS = {
     dash: <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg>,
     keyword: <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4-4" /></svg>,
+    mktshare: SI('M3 20V12l4 3 4-7 5 5 5-6v13z'),
+    compwatch: <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" /><path d="M12 2v4M12 18v4M2 12h4M18 12h4" /><circle cx="12" cy="12" r="2.5" /></svg>,
     family: SI('M4 18V9m5 9V5m5 13v-6m5 6V8'),
     ranks: SI('M4 20V8m5 12v-7m5 7V4m5 16v-9'),
     ads: SI('M3 12h4l3 8 4-16 3 8h4'),
@@ -1900,18 +2046,20 @@ export default function App() {
       </aside>
       <main className="main">
         {tab === 'dash' && <Dashboard region={region} onNav={setTab} />}
+        {tab === 'mktshare' && <MarketShare region={region} />}
+        {tab === 'compwatch' && <CompetitionWatch region={region} />}
         {tab === 'keyword' && <KeywordExplorer region={region} />}
         {tab === 'family' && <FamilyExplorer region={region} />}
         {tab === 'ranks' && <OrganicRanks region={region} />}
-        {tab === 'ads' && <AdsExplorer />}
-        {tab === 'tacos' && <TacosExplorer />}
-        {tab === 'opt' && <OptimizeExplorer />}
-        {tab === 'rec' && <RecommendationsExplorer onNav={setTab} />}
-        {tab === 'map' && <CampaignMapping />}
+        {tab === 'ads' && <AdsExplorer region={region} />}
+        {tab === 'tacos' && <TacosExplorer region={region} />}
+        {tab === 'opt' && <OptimizeExplorer region={region} />}
+        {tab === 'rec' && <RecommendationsExplorer region={region} onNav={setTab} />}
+        {tab === 'map' && <CampaignMapping region={region} />}
         {tab === 'cats' && <Categories region={region} />}
         {tab === 'asin' && <AsinExplorer region={region} />}
         {tab === 'catalog' && <CatalogTab />}
-        {tab === 'tgts' && <TargetsTab />}
+        {tab === 'tgts' && <TargetsTab region={region} />}
         {tab === 'dl' && <Downloads region={region} />}
         <div className="muted small" style={{ marginTop: 20 }}>
           Data: Amazon Brand Analytics SQP · {dataRange || '…'} · search-attributed purchases (not total units; excludes 1P/Vendor).
